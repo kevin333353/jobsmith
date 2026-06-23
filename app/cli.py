@@ -1,9 +1,10 @@
-"""終端機進入點：讀 JD → 跑圖 → 印匹配報告。"""
+"""終端機進入點：讀 JD → 跑並行圖 → 印完整投遞包。"""
 import json
 import sys
 from pathlib import Path
 
-from app.models import Profile, MatchReport
+from app.models import Profile
+from app.state import CopilotState
 from app.graph import build_graph
 
 
@@ -12,30 +13,77 @@ def load_profile(path: str = "data/demo_profile.json") -> Profile:
     return Profile(**data)
 
 
-def format_report(report: MatchReport, job_title: str) -> str:
+def _join(items: list[str]) -> str:
+    return "、".join(items) if items else "（無）"
+
+
+def format_output(state: dict, job_title: str) -> str:
+    report = state["match_report"]
     lines = [
         f"=== 匹配報告：{job_title} ===",
         f"分數：{report.score}/100",
         f"建議續做：{'是' if report.recommend_proceed else '否'}（{report.reason}）",
-        "",
-        "符合項：" + ("、".join(report.matched) or "（無）"),
-        "落差項：" + ("、".join(report.gaps) or "（無）"),
-        "補強建議：" + ("、".join(report.suggestions) or "（無）"),
+        "符合項：" + _join(report.matched),
+        "落差項：" + _join(report.gaps),
+        "補強建議：" + _join(report.suggestions),
     ]
+
+    company = state.get("company_brief")
+    if company is not None:
+        lines += [
+            "",
+            f"=== 公司情報：{company.company} ===",
+            f"薪資範圍：{company.salary_range or '（無）'}",
+            "福利：" + _join(company.benefits),
+            "避雷紅旗：" + _join(company.red_flags),
+        ]
+        if company.data_limited:
+            lines.append("（註：公開資料有限）")
+
+    resume = state.get("tailored_resume")
+    if resume is not None:
+        lines += [
+            "",
+            "=== 客製履歷 ===",
+            f"定位：{resume.summary}",
+            "重點條列：" + _join(resume.bullets),
+            "ATS 命中：" + _join(resume.ats_keywords_hit),
+            "ATS 尚缺：" + _join(resume.ats_keywords_missing),
+        ]
+
+    letter = state.get("cover_letter")
+    if letter is not None:
+        lines += ["", "=== 求職信/自傳 ===", letter.body]
+
+    kit = state.get("interview_kit")
+    if kit is not None:
+        lines += [
+            "",
+            "=== 面試準備 ===",
+            "技術題：" + _join(kit.technical_questions),
+            "行為題：" + _join(kit.behavioral_questions),
+            "台灣特有題：" + _join(kit.taiwan_specific_questions),
+            "反向提問：" + _join(kit.reverse_questions),
+            "避雷提醒：" + _join(kit.cautions),
+        ]
+
     return "\n".join(lines)
 
 
-def run(jd_path: str, profile_path: str = "data/demo_profile.json") -> MatchReport:
+def run(jd_path: str, profile_path: str = "data/demo_profile.json") -> CopilotState:
     jd_text = Path(jd_path).read_text(encoding="utf-8")
     profile = load_profile(profile_path)
     graph = build_graph()
-    final = graph.invoke({
+    return graph.invoke({
         "jd_text": jd_text,
         "profile": profile,
         "parsed_job": None,
         "match_report": None,
+        "company_brief": None,
+        "tailored_resume": None,
+        "cover_letter": None,
+        "interview_kit": None,
     })
-    return final["match_report"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,9 +92,9 @@ def main(argv: list[str] | None = None) -> int:
         print("用法：python -m app.cli <jd 檔案路徑>")
         return 1
     jd_path = argv[0]
-    report = run(jd_path)
+    state = run(jd_path)
     title = Path(jd_path).stem
-    print(format_report(report, job_title=title))
+    print(format_output(state, job_title=title))
     return 0
 
 
