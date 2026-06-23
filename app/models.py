@@ -88,3 +88,32 @@ class CritiqueReport(BaseModel):
     interview_score: int = Field(ge=0, le=100)
     overall_pass: bool = Field(description="三份成品是否整體達標")
     feedback: list[str] = Field(default_factory=list, description="若未通過，給下一輪的具體修改指示")
+
+
+class ResumeIssue(BaseModel):
+    """履歷健檢發現的單一問題。"""
+    severity: str = Field(description="嚴重度：high | medium | low")
+    area: str = Field(description="問題所在區塊，如『工作經歷』『技能』")
+    problem: str = Field(description="問題描述")
+    fix: str = Field(description="具體可照做的修正建議")
+
+
+class ResumeRewrite(BaseModel):
+    """改寫前後對照範例。"""
+    original: str = Field(description="原句")
+    improved: str = Field(description="改寫後")
+    why: str = Field(description="為何更好")
+
+
+class ResumeAssessment(BaseModel):
+    """② 履歷健檢報告。"""
+    overall_score: int = Field(ge=0, le=100, description="整體分數")
+    clarity_score: int = Field(ge=0, le=100, description="表達清晰度")
+    impact_score: int = Field(ge=0, le=100, description="量化成果/影響力")
+    ats_keyword_score: int = Field(ge=0, le=100, description="ATS 關鍵字涵蓋")
+    localization_score: int = Field(ge=0, le=100, description="台灣履歷慣例符合度")
+    completeness_score: int = Field(ge=0, le=100, description="完整度")
+    summary: str = Field(description="一段總評")
+    strengths: list[str] = Field(default_factory=list, description="優點清單")
+    issues: list[ResumeIssue] = Field(default_factory=list, description="問題清單")
+    rewrite_examples: list[ResumeRewrite] = Field(default_factory=list, description="改寫範例")

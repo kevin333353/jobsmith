@@ -70,3 +70,33 @@ def test_critique_report_score_bounds():
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         CritiqueReport(resume_score=101, cover_letter_score=0, interview_score=0, overall_pass=False)
+
+
+from app.models import ResumeIssue, ResumeRewrite, ResumeAssessment
+
+
+def test_resume_assessment_round_trips():
+    a = ResumeAssessment(
+        overall_score=78, clarity_score=80, impact_score=70,
+        ats_keyword_score=75, localization_score=85, completeness_score=80,
+        summary="整體不錯，量化成果可再加強。",
+        strengths=["技術棧清楚"],
+        issues=[ResumeIssue(severity="medium", area="工作經歷",
+                            problem="缺乏量化", fix="加入數字，如『提升 30% 效能』")],
+        rewrite_examples=[ResumeRewrite(original="負責後端開發",
+                                        improved="主導後端 API 開發，支撐日活 5 萬",
+                                        why="加入範圍與量化成果")],
+    )
+    dumped = a.model_dump()
+    assert dumped["overall_score"] == 78
+    assert dumped["issues"][0]["severity"] == "medium"
+    assert dumped["rewrite_examples"][0]["improved"].startswith("主導")
+
+
+def test_resume_assessment_score_bounds():
+    with pytest.raises(ValidationError):
+        ResumeAssessment(
+            overall_score=120, clarity_score=0, impact_score=0,
+            ats_keyword_score=0, localization_score=0, completeness_score=0,
+            summary="x",
+        )
