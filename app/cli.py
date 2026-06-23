@@ -1,7 +1,10 @@
-"""終端機進入點：讀 JD → 跑並行圖 → 印完整投遞包。"""
+"""終端機進入點：讀 JD → 跑反思迴圈圖 → 人工核可 → 印完整投遞包。"""
 import json
 import sys
+import uuid
 from pathlib import Path
+
+from langgraph.types import Command
 
 from app.models import Profile
 from app.state import CopilotState
@@ -67,6 +70,20 @@ def format_output(state: dict, job_title: str) -> str:
             "避雷提醒：" + _join(kit.cautions),
         ]
 
+    critique = state.get("critique")
+    if critique is not None:
+        lines += [
+            "",
+            "=== 品管評審 ===",
+            f"履歷 {critique.resume_score}／求職信 {critique.cover_letter_score}／面試 {critique.interview_score}",
+            f"整體達標：{'是' if critique.overall_pass else '否'}",
+            "修改意見：" + _join(critique.feedback),
+        ]
+
+    approved = state.get("approved")
+    if approved is not None:
+        lines += ["", f"=== 核可狀態：{'已核可' if approved else '未核可'} ==="]
+
     return "\n".join(lines)
 
 
@@ -74,7 +91,8 @@ def run(jd_path: str, profile_path: str = "data/demo_profile.json") -> CopilotSt
     jd_text = Path(jd_path).read_text(encoding="utf-8")
     profile = load_profile(profile_path)
     graph = build_graph()
-    return graph.invoke({
+    config = {"configurable": {"thread_id": uuid.uuid4().hex}}
+    initial = {
         "jd_text": jd_text,
         "profile": profile,
         "parsed_job": None,
@@ -83,7 +101,19 @@ def run(jd_path: str, profile_path: str = "data/demo_profile.json") -> CopilotSt
         "tailored_resume": None,
         "cover_letter": None,
         "interview_kit": None,
-    })
+        "critique": None,
+        "revision_count": 0,
+        "approved": None,
+    }
+    result = graph.invoke(initial, config)
+
+    if "__interrupt__" in result:
+        state_values = graph.get_state(config).values
+        print(format_output(state_values, job_title=Path(jd_path).stem))
+        decision = input("\n核可這份投遞包嗎？(y/n)：")
+        result = graph.invoke(Command(resume=decision), config)
+
+    return graph.get_state(config).values
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,8 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     jd_path = argv[0]
     state = run(jd_path)
-    title = Path(jd_path).stem
-    print(format_output(state, job_title=title))
+    print(format_output(state, job_title=Path(jd_path).stem))
     return 0
 
 
