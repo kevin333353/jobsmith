@@ -3,7 +3,7 @@ from typing import TypedDict
 
 from app.models import (
     Profile, ParsedJob, MatchReport,
-    CompanyBrief, TailoredResume, CoverLetter, InterviewKit,
+    CompanyBrief, TailoredResume, CoverLetter, InterviewKit, CritiqueReport,
 )
 
 
@@ -16,3 +16,6 @@ class CopilotState(TypedDict):
     tailored_resume: TailoredResume | None
     cover_letter: CoverLetter | None
     interview_kit: InterviewKit | None
+    critique: CritiqueReport | None
+    revision_count: int
+    approved: bool | None

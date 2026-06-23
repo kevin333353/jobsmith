@@ -55,3 +55,18 @@ def test_cover_letter_requires_body():
 def test_interview_kit_defaults_empty_lists():
     k = InterviewKit()
     assert k.technical_questions == [] and k.reverse_questions == []
+
+
+from app.models import CritiqueReport
+
+
+def test_critique_report_defaults():
+    c = CritiqueReport(resume_score=80, cover_letter_score=75, interview_score=70, overall_pass=True)
+    assert c.feedback == []
+
+
+def test_critique_report_score_bounds():
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        CritiqueReport(resume_score=101, cover_letter_score=0, interview_score=0, overall_pass=False)

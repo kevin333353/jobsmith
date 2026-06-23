@@ -79,3 +79,12 @@ class InterviewKit(BaseModel):
     reverse_questions: list[str] = Field(default_factory=list, description="反向提問")
     company_focus_points: list[str] = Field(default_factory=list, description="公司近況考點")
     cautions: list[str] = Field(default_factory=list, description="避雷提醒")
+
+
+class CritiqueReport(BaseModel):
+    """⑥ 品管/反思評審報告。"""
+    resume_score: int = Field(ge=0, le=100)
+    cover_letter_score: int = Field(ge=0, le=100)
+    interview_score: int = Field(ge=0, le=100)
+    overall_pass: bool = Field(description="三份成品是否整體達標")
+    feedback: list[str] = Field(default_factory=list, description="若未通過，給下一輪的具體修改指示")
