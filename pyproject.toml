@@ -4,3 +4,12 @@ markers = [
     "live: 會真正呼叫 Anthropic API 的測試（預設略過，需 -m live 才跑）",
 ]
 addopts = "-m 'not live'"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]

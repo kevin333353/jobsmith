@@ -5,3 +5,7 @@ pydantic>=2.7
 python-dotenv>=1.0
 pytest>=8.0
 requests>=2.31
+langchain-openai>=0.2
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx>=0.27

@@ -1,13 +1,29 @@
-"""ChatAnthropic 的薄包裝：依分層建立 LLM。"""
-from langchain_anthropic import ChatAnthropic
+"""依 LLM_BACKEND 建立 LLM（介面一致：.with_structured_output(...).invoke(...)）。"""
+import os
 
+from app import settings
 from app.settings import get_model
 
 
-def get_llm(tier: str, *, temperature: float = 0, max_tokens: int = 2000) -> ChatAnthropic:
-    """依模型分層回傳設定好的 ChatAnthropic 實例。"""
-    return ChatAnthropic(
-        model=get_model(tier),
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+def get_llm(tier: str, *, temperature: float = 0, max_tokens: int = 2000):
+    """依分層與後端回傳設定好的 chat model（含重試）。"""
+    backend = settings.LLM_BACKEND
+    if backend == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(
+            model=get_model(tier),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_retries=4,
+        )
+    if backend == "qianfan":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            base_url=settings.QIANFAN_BASE_URL,
+            api_key=os.environ.get("QIANFAN_API_KEY", "missing"),
+            model=settings.QIANFAN_MODEL_TIERS[tier],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_retries=4,
+        )
+    raise ValueError(f"unknown LLM_BACKEND: {backend!r}")
