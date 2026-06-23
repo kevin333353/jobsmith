@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from langgraph.types import Command
 
@@ -20,6 +21,9 @@ GRAPH = build_graph()
 
 _WEB_DIR = Path(__file__).parent / "web"
 _ROOT = Path(__file__).parent.parent  # 專案根（app/ 的上一層）
+_FRONTEND_DIST = _ROOT / "frontend" / "dist"  # Vite 建置產物（產品級前端）
+if (_FRONTEND_DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
 
 
 def serialize_update(update: dict) -> dict:
@@ -141,4 +145,7 @@ def resume(body: ResumeBody):
 
 @app.get("/", response_class=HTMLResponse)
 def index():
+    dist_index = _FRONTEND_DIST / "index.html"
+    if dist_index.exists():
+        return dist_index.read_text(encoding="utf-8")
     return (_WEB_DIR / "index.html").read_text(encoding="utf-8")
