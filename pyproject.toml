@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+    "live: 會真正呼叫 Anthropic API 的測試（預設略過，需 -m live 才跑）",
+]
+addopts = "-m 'not live'"
