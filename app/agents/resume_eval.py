@@ -6,7 +6,8 @@ STRUCTURE_SYSTEM = (
     "你是履歷解析器。請從使用者提供的履歷全文中，抽取結構化欄位："
     "姓名(name)、一句話定位(summary)、技能清單(skills)、經歷條列(experiences)、"
     "學歷(education)、總年資(years_experience)、期望職務(preferred_roles)。"
-    "raw_text 欄位請填入原始履歷全文。找不到的欄位留空或 null，不要捏造。"
+    "raw_text 欄位請直接填入空字串即可（系統會自行補上原文，不需你回填）。"
+    "找不到的欄位留空或 null，不要捏造。"
 )
 
 EVAL_SYSTEM = (
@@ -29,8 +30,12 @@ def structure_profile(resume_text: str) -> Profile:
 
 
 def evaluate_resume(resume_text: str, profile: Profile) -> ResumeAssessment:
-    """履歷健檢評分（deep 分層）。"""
-    llm = get_llm("deep").with_structured_output(ResumeAssessment)
+    """履歷健檢評分（deep 分層）。
+
+    健檢報告欄位多（含巢狀 issues/rewrite_examples），且 deep 為推理模型會額外
+    消耗 reasoning tokens，故提高 max_tokens 避免結構化輸出被截斷而無法解析。
+    """
+    llm = get_llm("deep", max_tokens=6000).with_structured_output(ResumeAssessment)
     human = (
         f"【履歷全文】\n{resume_text}\n\n"
         f"【已結構化資料】\n{profile.model_dump_json(indent=2)}"

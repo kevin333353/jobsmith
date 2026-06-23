@@ -93,13 +93,17 @@ async def resume_evaluate(
         if not text.strip():
             yield _sse({"type": "error", "message": "請提供履歷檔案或文字"})
             return
-        yield _sse({"type": "progress", "step": "structure", "message": "解析履歷中…"})
-        profile = structure_profile(text)
-        yield _sse({"type": "profile", "data": profile})
-        yield _sse({"type": "progress", "step": "evaluate", "message": "健檢評估中…"})
-        assessment = evaluate_resume(text, profile)
-        yield _sse({"type": "assessment", "data": assessment})
-        yield _sse({"type": "done"})
+        try:
+            yield _sse({"type": "progress", "step": "structure", "message": "解析履歷中…"})
+            profile = structure_profile(text)
+            yield _sse({"type": "profile", "data": profile})
+            yield _sse({"type": "progress", "step": "evaluate", "message": "健檢評估中…"})
+            assessment = evaluate_resume(text, profile)
+            yield _sse({"type": "assessment", "data": assessment})
+            yield _sse({"type": "done"})
+        except Exception as exc:  # LLM 後端 429/額度/截斷等：回傳友善訊息而非中斷串流
+            yield _sse({"type": "error",
+                        "message": f"AI 服務暫時無法使用，請稍後再試。（{type(exc).__name__}）"})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 

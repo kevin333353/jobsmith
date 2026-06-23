@@ -110,3 +110,16 @@ def test_resume_evaluate_empty_returns_error():
     r = client.post("/api/resume/evaluate", data={"resume_text": "   "})
     events = _parse_sse(r.text)
     assert any(e["type"] == "error" for e in events)
+
+
+def test_resume_evaluate_handles_agent_error(monkeypatch):
+    def boom(text):
+        raise RuntimeError("rate limited")
+    monkeypatch.setattr(server_mod, "structure_profile", boom)
+    client = TestClient(server_mod.app)
+    r = client.post("/api/resume/evaluate", data={"resume_text": "履歷文字 Python"})
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    types = [e["type"] for e in events]
+    assert "error" in types
+    assert "assessment" not in types
