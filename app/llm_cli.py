@@ -106,7 +106,7 @@ class _CLIStructured:
             except (ValidationError, json.JSONDecodeError) as exc:
                 last_err = exc
                 prompt = base + "\n\n（上次輸出無法解析為合法 JSON，請重新只輸出合法 JSON 物件）"
-        raise RuntimeError(f"CLI 結構化輸出解析失敗：{last_err}")
+        raise RuntimeError(f"CLI 結構化輸出解析失敗：{last_err}") from last_err
 
 
 class ClaudeCLIChat:
@@ -128,25 +128,22 @@ class ClaudeCLIChat:
 # Codex CLI（codex exec）
 # ---------------------------------------------------------------------------
 
-def _run_codex(prompt: str, schema_model: Type[BaseModel] | None = None) -> str:
-    """呼叫 `codex exec`（訂閱）。有 schema 時用 --output-schema 強制結構，
-    並以 --output-last-message 取最終訊息。"""
+def _run_codex(prompt: str) -> str:
+    """呼叫 `codex exec`（訂閱），以 --output-last-message 取模型最終訊息。
+
+    結構化輸出靠 prompt 內的 JSON Schema 指示 + 上層解析/重試（與 claude_cli 一致），
+    不用 --output-schema：codex 的 --output-schema 走 OpenAI 嚴格 schema（需
+    additionalProperties:false 等），Pydantic 預設 schema 不相容會直接報錯。
+    """
     exe = os.environ.get("CODEX_CLI_PATH") or shutil.which("codex")
     if not exe:
         raise RuntimeError("找不到 codex CLI，請確認已安裝並在 PATH。")
     env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
     with tempfile.TemporaryDirectory() as td:
         out_file = Path(td) / "last.txt"
+        # -o 為 --output-last-message 短旗標：把模型最終訊息寫入檔案，避免混入 agent log
         args = [exe, "exec", "--skip-git-repo-check", "-s", "read-only",
-                "-o", str(out_file)]
-        if schema_model is not None:
-            schema_file = Path(td) / "schema.json"
-            schema_file.write_text(
-                json.dumps(schema_model.model_json_schema(), ensure_ascii=False),
-                encoding="utf-8",
-            )
-            args += ["--output-schema", str(schema_file)]
-        args.append(prompt)
+                "-o", str(out_file), prompt]
         proc = subprocess.run(
             args, input="", capture_output=True, text=True, encoding="utf-8",
             env=env, timeout=_TIMEOUT,
@@ -168,13 +165,13 @@ class _CodexStructured:
         prompt = base
         last_err = None
         for _ in range(_MAX_TRIES):
-            raw = _run_codex(prompt, self._schema)
+            raw = _run_codex(prompt)
             try:
                 return _parse_into(self._schema, raw)
             except (ValidationError, json.JSONDecodeError) as exc:
                 last_err = exc
                 prompt = base + "\n\n（上次輸出無法解析為合法 JSON，請重新只輸出合法 JSON 物件）"
-        raise RuntimeError(f"CLI 結構化輸出解析失敗：{last_err}")
+        raise RuntimeError(f"CLI 結構化輸出解析失敗：{last_err}") from last_err
 
 
 class CodexCLIChat:
@@ -189,4 +186,4 @@ class CodexCLIChat:
 
     def invoke(self, messages):
         system, human = _messages_to_prompt(messages)
-        return _run_codex(f"{system}\n\n{human}", None)
+        return _run_codex(f"{system}\n\n{human}")

@@ -42,6 +42,7 @@ export default function App() {
     const form = new FormData()
     form.append("file", f)
     evaluate(form)
+    e.target.value = ""  // 允許再次上傳同一檔案（否則 onChange 不會再觸發）
   }
 
   return (

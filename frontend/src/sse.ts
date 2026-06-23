@@ -1,6 +1,9 @@
 // 讀取 fetch 的 SSE 串流（POST 無法用 EventSource，改用 ReadableStream）。
 export async function readSSE(resp: Response, onEvent: (ev: any) => void) {
-  const reader = resp.body!.getReader()
+  if (!resp.ok || !resp.body) {
+    throw new Error(`伺服器回應異常（HTTP ${resp.status}）`)
+  }
+  const reader = resp.body.getReader()
   const dec = new TextDecoder()
   let buf = ""
   for (;;) {

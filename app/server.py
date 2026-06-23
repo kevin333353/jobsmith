@@ -96,7 +96,7 @@ async def resume_evaluate(
         try:
             yield _sse({"type": "progress", "step": "structure", "message": "解析履歷中…"})
             profile = structure_profile(text)
-            yield _sse({"type": "profile", "data": profile})
+            yield _sse({"type": "profile", "data": profile.model_dump(exclude={"raw_text"})})
             yield _sse({"type": "progress", "step": "evaluate", "message": "健檢評估中…"})
             assessment = evaluate_resume(text, profile)
             yield _sse({"type": "assessment", "data": assessment})
@@ -152,4 +152,12 @@ def index():
     dist_index = _FRONTEND_DIST / "index.html"
     if dist_index.exists():
         return dist_index.read_text(encoding="utf-8")
+    return (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/classic", response_class=HTMLResponse)
+def classic():
+    """舊版『看得見的多 agent 編排』頁：完整投遞包流程
+    （解析→匹配→公司情報→履歷∥求職信∥面試→品管反思迴圈→人工核可），
+    直接打 /api/run 與 /api/resume 跑既有 LangGraph 8-agent 圖。"""
     return (_WEB_DIR / "index.html").read_text(encoding="utf-8")
