@@ -74,3 +74,11 @@ def test_run_stop_path_finishes_without_interrupt(monkeypatch):
     types = [e["type"] for e in events]
     assert "interrupt" not in types
     assert types[-1] == "done"
+
+
+def test_index_serves_html():
+    client = TestClient(server_mod.app)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "<html" in r.text.lower()
+    assert "求職" in r.text  # 確認是我們的頁面而非佔位
