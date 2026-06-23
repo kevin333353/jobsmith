@@ -50,3 +50,13 @@ export interface PipelineState {
   tailored_resume?: TailoredResume; cover_letter?: CoverLetter; interview_kit?: InterviewKit;
   critique?: CritiqueReport; approved?: boolean | null; revision_count?: number;
 }
+
+// ---- 職缺探索（對應 app/models.py 的 JobPosting / JobMatch）----
+export interface JobPosting {
+  source: string; title: string; company: string; location?: string | null;
+  salary?: string | null; url: string; snippet?: string | null; requirements: string[];
+}
+export interface JobMatch {
+  job: JobPosting; fit_score: number; matched: string[]; gaps: string[]; reason: string;
+}
+export interface Seed { jd: string; nonce: number }

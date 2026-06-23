@@ -1,5 +1,5 @@
-import { useState } from "react"
-import type { PipelineState } from "../types"
+import { useEffect, useState } from "react"
+import type { PipelineState, Seed } from "../types"
 import { readSSE } from "../sse"
 import { AgentTrace } from "../components/pipeline/AgentTrace"
 import {
@@ -8,7 +8,7 @@ import {
 
 type Phase = "idle" | "running" | "approval" | "done"
 
-export function PipelineView() {
+export function PipelineView({ seed }: { seed?: Seed | null }) {
   const [jd, setJd] = useState("")
   const [phase, setPhase] = useState<Phase>("idle")
   const [status, setStatus] = useState("")
@@ -34,12 +34,13 @@ export function PipelineView() {
     }
   }
 
-  async function run() {
+  async function run(jdText: string = jd) {
+    if (!jdText.trim()) return
     setError(""); setDone([]); setState({}); setRevisions(0); setPhase("running"); setStatus("啟動中…")
     try {
       const resp = await fetch("/api/run", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jd_text: jd }),
+        body: JSON.stringify({ jd_text: jdText }),
       })
       await readSSE(resp, handle)
       setPhase((p) => (p === "approval" ? p : "done"))
@@ -67,6 +68,12 @@ export function PipelineView() {
     setJd(j.jd_text)
   }
 
+  // 從「自動找職缺」點選某職缺帶 JD 進來 → 自動開跑
+  useEffect(() => {
+    if (seed?.jd) { setJd(seed.jd); run(seed.jd) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.nonce])
+
   const hasDocs = Boolean(
     state.match_report || state.company_brief || state.tailored_resume ||
     state.cover_letter || state.interview_kit || state.critique,
@@ -82,7 +89,7 @@ export function PipelineView() {
           onChange={(e) => setJd(e.target.value)}
         />
         <div className="flex flex-wrap gap-2 mt-3 items-center">
-          <button onClick={run} disabled={phase === "running" || !jd.trim()}
+          <button onClick={() => run()} disabled={phase === "running" || !jd.trim()}
             className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50">
             開始（跑 8 個 agent）
           </button>
