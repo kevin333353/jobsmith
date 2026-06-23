@@ -26,4 +26,10 @@ def get_llm(tier: str, *, temperature: float = 0, max_tokens: int = 2000):
             max_tokens=max_tokens,
             max_retries=4,
         )
+    if backend == "claude_cli":
+        from app.llm_cli import ClaudeCLIChat, CLAUDE_TIER_MODELS
+        return ClaudeCLIChat(CLAUDE_TIER_MODELS[tier], max_tokens=max_tokens)
+    if backend == "codex_cli":
+        from app.llm_cli import CodexCLIChat
+        return CodexCLIChat(tier, max_tokens=max_tokens)
     raise ValueError(f"unknown LLM_BACKEND: {backend!r}")

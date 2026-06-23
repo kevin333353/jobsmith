@@ -36,3 +36,18 @@ def test_unknown_backend_raises(monkeypatch):
     import pytest
     with pytest.raises(ValueError):
         m.get_llm("standard")
+
+
+def test_claude_cli_backend_selected(monkeypatch):
+    m = _reload(monkeypatch, "claude_cli")
+    from app.llm_cli import ClaudeCLIChat
+    llm = m.get_llm("deep")
+    assert isinstance(llm, ClaudeCLIChat)
+    assert llm.model == "opus"
+
+
+def test_codex_cli_backend_selected(monkeypatch):
+    m = _reload(monkeypatch, "codex_cli")
+    from app.llm_cli import CodexCLIChat
+    llm = m.get_llm("standard")
+    assert isinstance(llm, CodexCLIChat)
