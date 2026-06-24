@@ -363,7 +363,10 @@ def _probe_claude() -> str:
 
 def _probe_codex() -> str:
     from app.llm_cli import _run_codex
-    return _run_codex(_PROBE_PROMPT, timeout=_PROBE_TIMEOUT)
+    # 沿用使用者設定的 codex 模型（不硬指定可能不存在的模型名），但把推理強度壓到 low，
+    # 讓這個極短探測盡快完成；未知 config 鍵不會報錯（除非 --strict-config）。
+    return _run_codex(_PROBE_PROMPT, timeout=_PROBE_TIMEOUT,
+                      extra_args=["-c", 'model_reasoning_effort="low"'])
 
 
 @app.post("/api/backend/test")

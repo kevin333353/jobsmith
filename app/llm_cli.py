@@ -203,7 +203,7 @@ class ClaudeCLIChat:
 # Codex CLI（codex exec）
 # ---------------------------------------------------------------------------
 
-def _run_codex(prompt: str, timeout: int = _TIMEOUT) -> str:
+def _run_codex(prompt: str, timeout: int = _TIMEOUT, extra_args: list[str] | None = None) -> str:
     """呼叫 `codex exec`（訂閱），以 --output-last-message 取模型最終訊息。
 
     結構化輸出靠 prompt 內的 JSON Schema 指示 + 上層解析/重試（與 claude_cli 一致），
@@ -218,7 +218,7 @@ def _run_codex(prompt: str, timeout: int = _TIMEOUT) -> str:
         out_file = Path(td) / "last.txt"
         # -o 為 --output-last-message 短旗標：把模型最終訊息寫入檔案，避免混入 agent log
         args = [exe, "exec", "--skip-git-repo-check", "-s", "read-only",
-                "-o", str(out_file), prompt]
+                "-o", str(out_file), *(extra_args or []), prompt]
         proc = subprocess.run(
             args, input="", capture_output=True, text=True, encoding="utf-8",
             env=env, timeout=timeout,
