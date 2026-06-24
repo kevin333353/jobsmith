@@ -398,8 +398,8 @@ def test_jobs_auto_empty_returns_error():
     assert any(e["type"] == "error" for e in events)
 
 
-def test_jobs_auto_merges_company_list_jobs(monkeypatch):
-    """指定公司名單時，公司開缺併入候選池一起排序（不再是獨立模式）。"""
+def test_jobs_auto_lists_company_jobs_in_separate_event(monkeypatch):
+    """指定公司名單時，公司開缺走獨立的 company_jobs 事件、與 AI 推薦分開排序。"""
     from app.models import Profile, JobPosting, JobMatch, SearchResult
     monkeypatch.setattr(server_mod, "structure_profile",
                         lambda text: Profile(name="王", summary="後端", raw_text=text))
@@ -423,8 +423,11 @@ def test_jobs_auto_merges_company_list_jobs(monkeypatch):
     events = _parse_sse(r.text)
     assert captured["companies"] == ["Google", "華碩"]
     jobs_ev = next(e for e in events if e["type"] == "jobs")
-    titles = {m["job"]["title"] for m in jobs_ev["data"]}
-    assert {"AI 工程師", "ML Engineer"} <= titles  # 履歷職缺 + 公司開缺都在
+    ai_titles = {m["job"]["title"] for m in jobs_ev["data"]}
+    assert ai_titles == {"AI 工程師"}                 # AI 推薦只含履歷搜尋結果
+    comp_ev = next(e for e in events if e["type"] == "company_jobs")
+    comp_titles = {m["job"]["title"] for m in comp_ev["data"]}
+    assert comp_titles == {"ML Engineer"}            # 公司開缺在獨立區塊
 
 
 def test_jobs_auto_without_companies_skips_company_lookup(monkeypatch):

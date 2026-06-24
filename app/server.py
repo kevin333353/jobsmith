@@ -195,13 +195,10 @@ def jobs_auto(
             yield _sse({"type": "queries", "queries": queries})
 
             seen: set[str] = set()
-            all_jobs = []
-            all_blocked = True
+            resume_jobs = []
             for q in queries[:3]:
                 yield _sse({"type": "progress", "step": "search", "message": f"搜尋「{q}」中…"})
                 for res in search_all(q, limit=15):
-                    if not res.blocked:
-                        all_blocked = False
                     yield _sse({"type": "source", "source": res.source,
                                 "count": len(res.jobs), "blocked": res.blocked})
                     for j in res.jobs:
@@ -209,11 +206,32 @@ def jobs_auto(
                         if key in seen:
                             continue
                         seen.add(key)
-                        all_jobs.append(j)
+                        resume_jobs.append(j)
 
-            # 使用者指定的公司名單：併入這些公司的開缺（job boards 依公司過濾 + 官網 careers），
-            # 與 AI 自動找到的職缺一起排序，讓使用者除了 AI 推薦外也能盯著想去的公司。
-            company_jobs = []
+            # 誠實降級：AI 搜尋零結果 → 告知並改用後備樣本職缺，demo 永遠有東西看。
+            used_fallback = False
+            if not resume_jobs:
+                used_fallback = True
+                yield _sse({"type": "all_blocked",
+                            "message": "即時職缺來源暫時取得不到結果，以下改用範例職缺示意，"
+                                       "並請改用下方 LinkedIn / 104 直連搜尋。"})
+                resume_jobs = _load_fallback_jobs()
+
+            # ① AI 依履歷找到的職缺：獨立排序、獨立顯示。
+            yield _sse({"type": "progress", "step": "rank",
+                        "message": f"依履歷排序 {len(resume_jobs)} 筆職缺…"})
+            matches = rank_jobs(profile, resume_jobs, top_k=None)  # 不設限，全部排序回傳（前端分頁）
+            yield _sse({"type": "jobs", "data": [m.model_dump() for m in matches],
+                        "fallback": used_fallback})
+            from app.agents.skill_gap import analyze_skill_gap
+            gap = analyze_skill_gap(profile, resume_jobs)  # 技能缺口分析以 AI 搜尋結果為市場樣本
+            if gap.top_demand:
+                yield _sse({"type": "skill_gap", "data": gap.model_dump()})
+            yield _sse({"type": "linkedin", "url": linkedin_search_url(queries[0] if queries else "")})
+
+            # ② 使用者指定的公司開缺：與 AI 搜尋『分開』收集、分開排序、分開顯示，
+            # 避免低適配的公司職缺佔據 AI 推薦名單前段、又吃掉排序名額。
+            company_pool = []
             for company in company_list:
                 yield _sse({"type": "progress", "step": "company",
                             "message": f"查「{company}」的開缺中…"})
@@ -224,37 +242,19 @@ def jobs_auto(
                 added = 0
                 for j in found:
                     key = j.url or (j.title + j.company)
-                    if key in seen:
+                    if key in seen:  # 已出現在 AI 結果就不重複列
                         continue
                     seen.add(key)
-                    company_jobs.append(j)
+                    company_pool.append(j)
                     added += 1
-                if added:
-                    all_blocked = False
                 yield _sse({"type": "source", "source": company,
                             "count": added, "blocked": added == 0})
-            # 指定公司的職缺排在前面，確保進入 LLM 排序名額（rank_jobs 只送前 N 筆評分）。
-            all_jobs = company_jobs + all_jobs
-
-            # 誠實降級：所有來源失敗或零結果 → 告知並改用後備樣本職缺，demo 永遠有東西看。
-            used_fallback = False
-            if not all_jobs:
-                used_fallback = True
-                yield _sse({"type": "all_blocked",
-                            "message": "即時職缺來源暫時取得不到結果，以下改用範例職缺示意，"
-                                       "並請改用下方 LinkedIn / 104 直連搜尋。"})
-                all_jobs = _load_fallback_jobs()
-
-            yield _sse({"type": "progress", "step": "rank",
-                        "message": f"依履歷排序 {len(all_jobs)} 筆職缺…"})
-            matches = rank_jobs(profile, all_jobs, top_k=None)  # 不設限，全部排序回傳（前端分頁）
-            yield _sse({"type": "jobs", "data": [m.model_dump() for m in matches],
-                        "fallback": used_fallback})
-            from app.agents.skill_gap import analyze_skill_gap
-            gap = analyze_skill_gap(profile, all_jobs)
-            if gap.top_demand:
-                yield _sse({"type": "skill_gap", "data": gap.model_dump()})
-            yield _sse({"type": "linkedin", "url": linkedin_search_url(queries[0] if queries else "")})
+            if company_pool:
+                yield _sse({"type": "progress", "step": "rank",
+                            "message": f"依履歷排序 {len(company_pool)} 筆指定公司職缺…"})
+                cmatches = rank_jobs(profile, company_pool, top_k=None)
+                yield _sse({"type": "company_jobs",
+                            "data": [m.model_dump() for m in cmatches]})
             yield _sse({"type": "done"})
         except Exception as exc:  # LLM/網路錯誤：友善降級
             yield _sse({"type": "error",
