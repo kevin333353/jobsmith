@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { Cpu } from "../ui/icons"
 
 interface BackendOption { id: string; label: string; available: boolean }
 
@@ -35,12 +36,13 @@ export function BackendSelector() {
   if (!options.length) return null
   return (
     <label className="no-print flex items-center gap-2 text-xs text-slate-500">
-      <span>引擎</span>
+      <Cpu className="w-4 h-4 text-slate-400" />
+      <span className="hidden sm:inline">引擎</span>
       <select
         value={current}
         disabled={busy}
         onChange={(e) => change(e.target.value)}
-        className="border rounded-lg px-2 py-1 text-xs bg-white disabled:opacity-50"
+        className="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white text-slate-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-brand-200"
       >
         {options.map((o) => (
           <option key={o.id} value={o.id} disabled={!o.available}>
