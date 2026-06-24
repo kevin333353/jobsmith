@@ -203,7 +203,7 @@ class ClaudeCLIChat:
 # Codex CLI（codex exec）
 # ---------------------------------------------------------------------------
 
-def _run_codex(prompt: str) -> str:
+def _run_codex(prompt: str, timeout: int = _TIMEOUT) -> str:
     """呼叫 `codex exec`（訂閱），以 --output-last-message 取模型最終訊息。
 
     結構化輸出靠 prompt 內的 JSON Schema 指示 + 上層解析/重試（與 claude_cli 一致），
@@ -221,7 +221,7 @@ def _run_codex(prompt: str) -> str:
                 "-o", str(out_file), prompt]
         proc = subprocess.run(
             args, input="", capture_output=True, text=True, encoding="utf-8",
-            env=env, timeout=_TIMEOUT,
+            env=env, timeout=timeout,
         )
         if proc.returncode != 0:
             raise RuntimeError(f"codex CLI 失敗（rc={proc.returncode}）：{(proc.stderr or '')[:300]}")

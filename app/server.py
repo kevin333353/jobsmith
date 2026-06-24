@@ -351,14 +351,19 @@ def post_backend(body: BackendBody):
     return {"current": settings.current_backend()}
 
 
+# 連線測試：用最輕的模型（haiku）+ 最短提示，只求拿到任何回覆，盡快完成。
+_PROBE_PROMPT = "只輸出數字 1"
+_PROBE_TIMEOUT = 45
+
+
 def _probe_claude() -> str:
     from app.llm_cli import _run_claude
-    return _run_claude("只回覆兩個字：你好", "haiku", timeout=90)
+    return _run_claude(_PROBE_PROMPT, "haiku", timeout=_PROBE_TIMEOUT)
 
 
 def _probe_codex() -> str:
     from app.llm_cli import _run_codex
-    return _run_codex("只回覆兩個字：你好")
+    return _run_codex(_PROBE_PROMPT, timeout=_PROBE_TIMEOUT)
 
 
 @app.post("/api/backend/test")
