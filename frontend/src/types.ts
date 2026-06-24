@@ -71,6 +71,13 @@ export interface TelemetryEntry {
   input_tokens: number; output_tokens: number; cost_usd: number;
 }
 
+// 多輪面試模擬（對應後端 app/agents/interview_sim.py）
+export interface InterviewQuestion { category: string; question: string }
+export interface AnswerFeedback {
+  score: number; strengths: string[]; improvements: string[]; sample_answer: string;
+}
+export interface InterviewSummary { overall_score: number; summary: string; advice: string[] }
+
 // 投遞包可編輯欄位（履歷 summary/bullets、求職信 subject/body；bullets 以換行分隔）
 export interface EditablePackage {
   resumeSummary: string;

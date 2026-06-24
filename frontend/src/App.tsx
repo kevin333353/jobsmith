@@ -3,17 +3,19 @@ import type { Seed, UserProfile } from "./types"
 import { JobSearchView } from "./views/JobSearchView"
 import { ResumeHealthView } from "./views/ResumeHealthView"
 import { PipelineView } from "./views/PipelineView"
+import { InterviewView } from "./views/InterviewView"
 import { BackendSelector } from "./components/BackendSelector"
 import { Sidebar } from "./ui/Sidebar"
 import type { NavItem } from "./ui/Sidebar"
-import { Compass, FileChartColumn, Workflow } from "./ui/icons"
+import { Compass, FileChartColumn, Workflow, MessagesSquare } from "./ui/icons"
 
-type Tab = "search" | "resume" | "pipeline"
+type Tab = "search" | "resume" | "pipeline" | "interview"
 
 const NAV: NavItem<Tab>[] = [
   { id: "search", label: "自動找職缺", icon: Compass },
   { id: "resume", label: "履歷健檢", icon: FileChartColumn },
   { id: "pipeline", label: "投遞包工作台", icon: Workflow },
+  { id: "interview", label: "面試模擬", icon: MessagesSquare },
 ]
 
 export default function App() {
@@ -46,6 +48,9 @@ export default function App() {
           </div>
           <div className={tab === "pipeline" ? "" : "hidden"}>
             <PipelineView seed={seed} fallbackProfile={profile} onBack={() => setTab("search")} />
+          </div>
+          <div className={tab === "interview" ? "" : "hidden"}>
+            <InterviewView fallbackProfile={profile} />
           </div>
         </div>
       </div>

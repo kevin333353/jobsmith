@@ -285,6 +285,61 @@ def post_backend(body: BackendBody):
     return {"current": settings.current_backend()}
 
 
+class InterviewStartBody(BaseModel):
+    jd_text: str
+    profile: dict | None = None
+    n: int = 6
+    profile_path: str = "data/demo_profile.json"
+
+
+class InterviewAnswerBody(BaseModel):
+    jd_text: str
+    question: str
+    answer: str
+    profile: dict | None = None
+    profile_path: str = "data/demo_profile.json"
+
+
+class InterviewSummaryBody(BaseModel):
+    jd_text: str
+    transcript: list[dict]
+
+
+@app.post("/api/interview/start")
+def interview_start(body: InterviewStartBody):
+    from app.agents.interview_sim import generate_questions
+    try:
+        profile = _resolve_profile(body)
+        qs = generate_questions(body.jd_text, profile, n=body.n)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"AI 服務暫時無法使用，請稍後再試。（{type(exc).__name__}）"},
+                            status_code=400)
+    return {"questions": [q.model_dump() for q in qs]}
+
+
+@app.post("/api/interview/answer")
+def interview_answer(body: InterviewAnswerBody):
+    from app.agents.interview_sim import evaluate_answer
+    try:
+        profile = _resolve_profile(body)
+        fb = evaluate_answer(body.question, body.answer, body.jd_text, profile)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"AI 服務暫時無法使用，請稍後再試。（{type(exc).__name__}）"},
+                            status_code=400)
+    return fb.model_dump()
+
+
+@app.post("/api/interview/summary")
+def interview_summary(body: InterviewSummaryBody):
+    from app.agents.interview_sim import summarize
+    try:
+        s = summarize(body.jd_text, body.transcript)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"AI 服務暫時無法使用，請稍後再試。（{type(exc).__name__}）"},
+                            status_code=400)
+    return s.model_dump()
+
+
 def _resolve_profile(body: RunBody) -> Profile:
     """優先用使用者真實履歷；缺省才退回 demo profile。"""
     if body.profile:

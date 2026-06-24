@@ -157,6 +157,32 @@ class SearchResult(BaseModel):
     error: str | None = None
 
 
+class InterviewQuestion(BaseModel):
+    """多輪面試模擬的單一題目。"""
+    category: str = Field(default="", description="技術 / 行為 / 台灣特有")
+    question: str = ""
+
+
+class InterviewQuestionList(BaseModel):
+    """generate_questions 的結構化輸出包裝。"""
+    items: list[InterviewQuestion] = Field(default_factory=list)
+
+
+class AnswerFeedback(BaseModel):
+    """對單一作答的即時回饋。"""
+    score: int = Field(default=0, ge=0, le=100)
+    strengths: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+    sample_answer: str = Field(default="", description="示範答法")
+
+
+class InterviewSummary(BaseModel):
+    """整場面試的總評。"""
+    overall_score: int = Field(default=0, ge=0, le=100)
+    summary: str = ""
+    advice: list[str] = Field(default_factory=list)
+
+
 class SupervisorDecision(BaseModel):
     """① Supervisor 的調度決策（LLM 動態判斷，取代寫死門檻；失敗時回門檻備援）。"""
     next_action: Literal["proceed", "stop", "revise", "approve"] = Field(
