@@ -240,8 +240,8 @@ def test_jobs_auto_falls_back_when_all_blocked(monkeypatch):
     types = [e["type"] for e in events]
     assert "all_blocked" in types          # 誠實告知來源失敗
     assert captured["n"] > 0               # 改用後備樣本職缺
-    jobs_ev = next(e for e in events if e["type"] == "jobs")
-    assert jobs_ev["fallback"] is True
+    rs = next(e for e in events if e["type"] == "rank_start")
+    assert rs["fallback"] is True          # fallback 旗標改放 rank_start
 
 
 def test_jobs_auto_emits_profile_event(monkeypatch):
@@ -384,11 +384,11 @@ def test_jobs_auto_streams_ranked_jobs(monkeypatch):
     events = _parse_sse(r.text)
     types = [e["type"] for e in events]
     assert types[0] == "start"
-    assert "queries" in types and "jobs" in types
+    assert "queries" in types and "ranked_batch" in types  # 改為分批串流
     assert types[-1] == "done"
-    jobs_ev = next(e for e in events if e["type"] == "jobs")
-    assert jobs_ev["data"][0]["fit_score"] == 88
-    assert jobs_ev["data"][0]["job"]["title"] == "AI 工程師"
+    ranked = [m for e in events if e["type"] == "ranked_batch" for m in e["data"]]
+    assert ranked[0]["fit_score"] == 88
+    assert ranked[0]["job"]["title"] == "AI 工程師"
 
 
 def test_jobs_auto_empty_returns_error():
@@ -422,8 +422,7 @@ def test_jobs_auto_lists_company_jobs_in_separate_event(monkeypatch):
                     data={"resume_text": "我的履歷 Python", "companies": "Google、華碩"})
     events = _parse_sse(r.text)
     assert captured["companies"] == ["Google", "華碩"]
-    jobs_ev = next(e for e in events if e["type"] == "jobs")
-    ai_titles = {m["job"]["title"] for m in jobs_ev["data"]}
+    ai_titles = {m["job"]["title"] for e in events if e["type"] == "ranked_batch" for m in e["data"]}
     assert ai_titles == {"AI 工程師"}                 # AI 推薦只含履歷搜尋結果
     comp_ev = next(e for e in events if e["type"] == "company_jobs")
     comp_titles = {m["job"]["title"] for m in comp_ev["data"]}

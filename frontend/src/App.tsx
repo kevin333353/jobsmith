@@ -5,17 +5,19 @@ import { ResumeHealthView } from "./views/ResumeHealthView"
 import { PipelineView } from "./views/PipelineView"
 import { InterviewView } from "./views/InterviewView"
 import { HistoryView } from "./views/HistoryView"
+import { SearchHistoryView } from "./views/SearchHistoryView"
 import { PreferencesView } from "./views/PreferencesView"
 import { BackendSelector } from "./components/BackendSelector"
 import { Onboarding } from "./components/Onboarding"
 import { Sidebar } from "./ui/Sidebar"
 import type { NavItem } from "./ui/Sidebar"
-import { Compass, FileChartColumn, Workflow, MessagesSquare, Archive, Settings2 } from "./ui/icons"
+import { Compass, FileChartColumn, Workflow, MessagesSquare, Archive, Settings2, Search } from "./ui/icons"
 
-type Tab = "search" | "resume" | "pipeline" | "interview" | "history" | "settings"
+type Tab = "search" | "searches" | "resume" | "pipeline" | "interview" | "history" | "settings"
 
 const NAV: NavItem<Tab>[] = [
   { id: "search", label: "自動找職缺", icon: Compass },
+  { id: "searches", label: "搜尋紀錄", icon: Search },
   { id: "resume", label: "履歷健檢", icon: FileChartColumn },
   { id: "pipeline", label: "投遞包工作台", icon: Workflow },
   { id: "interview", label: "面試模擬", icon: MessagesSquare },
@@ -68,6 +70,9 @@ export default function App() {
           {/* 分頁全掛載只切顯示，保留狀態 */}
           <div className={tab === "search" ? "" : "hidden"}>
             <JobSearchView onPick={pickJob} onProfile={setProfile} />
+          </div>
+          <div className={tab === "searches" ? "" : "hidden"}>
+            <SearchHistoryView active={tab === "searches"} onPick={pickJob} />
           </div>
           <div className={tab === "resume" ? "" : "hidden"}>
             <ResumeHealthView onProfile={setProfile} />

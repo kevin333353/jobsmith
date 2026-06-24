@@ -1,6 +1,7 @@
 """職缺來源註冊表：彙整多站搜尋、LinkedIn 深連結。"""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote
 
 from app.models import SearchResult
@@ -19,14 +20,23 @@ COMING_SOON: dict[str, str] = {}
 
 
 def search_all(keywords: str, sources: list[str] | None = None, limit: int = 15) -> list[SearchResult]:
-    """對選定來源各跑一次搜尋；單一來源失敗只回該來源 blocked，不影響其他。"""
-    names = sources or list(SEARCHABLE)
-    results = []
-    for n in names:
-        fn = SEARCHABLE.get(n)
-        if fn is not None:
-            results.append(fn(keywords, limit))
-    return results
+    """對選定來源『並行』各跑一次搜尋；單一來源失敗只回該來源 blocked，不影響其他。
+
+    結果固定依 names 的順序回傳（與並行無關），方便上層彙整與測試。
+    """
+    names = [n for n in (sources or list(SEARCHABLE)) if n in SEARCHABLE]
+    if not names:
+        return []
+    out: dict[str, SearchResult] = {}
+    with ThreadPoolExecutor(max_workers=len(names)) as ex:
+        futs = {ex.submit(SEARCHABLE[n], keywords, limit): n for n in names}
+        for fut in as_completed(futs):
+            n = futs[fut]
+            try:
+                out[n] = fut.result()
+            except Exception as e:  # noqa: BLE001 — 單一來源失敗不影響其他
+                out[n] = SearchResult(source=n, blocked=True, error=str(e)[:150])
+    return [out[n] for n in names]
 
 
 def linkedin_search_url(keywords: str) -> str:

@@ -1,101 +1,28 @@
 import { useEffect, useState } from "react"
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react"
-import type { JobMatch, JobPosting, UserProfile, SkillGapReport } from "../types"
+import type { JobMatch, UserProfile, SkillGapReport } from "../types"
 import { readSSE } from "../sse"
 import { SAMPLE_RESUME } from "../sampleResume"
+import { resolveJd } from "../lib/resolveJd"
+import { JobList, SRC_LABEL } from "../components/jobs/JobList"
 import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
 import { Skeleton } from "../ui/Skeleton"
 import { EmptyState } from "../ui/EmptyState"
-import { Search, Upload, Loader2, ExternalLink, Sparkles, AlertTriangle, CheckCircle2, XCircle, ChevronLeft, ChevronRight, Target, Building2, X } from "../ui/icons"
+import { Search, Upload, Loader2, ExternalLink, AlertTriangle, CheckCircle2, XCircle, Target, Building2, X } from "../ui/icons"
 
-const PAGE_SIZE = 8
 const SNAP_KEY = "copilot.jobsearch.v1"  // 上次搜尋結果快取（重新整理/重開沿用）
 
-const SRC_LABEL: Record<string, string> = {
-  "104": "104", yourator: "Yourator", linkedin: "LinkedIn", cake: "Cake", careers: "官網", sample: "範例",
-}
+type SourceStat = { source: string; count: number; blocked: boolean }
+const sortByFit = (arr: JobMatch[]) => [...arr].sort((a, b) => b.fit_score - a.fit_score)
 
-function fitGradient(s: number) {
-  return s >= 80 ? "from-emerald-500 to-emerald-600"
-    : s >= 60 ? "from-amber-500 to-amber-600"
-      : "from-slate-400 to-slate-500"
-}
-
-function FitBadge({ score }: { score: number }) {
-  return (
-    <div className={`shrink-0 w-14 h-14 rounded-xl bg-gradient-to-br ${fitGradient(score)} text-white grid place-items-center text-center`}>
-      <div className="text-lg font-bold leading-none">{score}</div>
-      <div className="text-[9px] opacity-85 mt-0.5">適配</div>
-    </div>
-  )
-}
-
-// 一筆職缺卡（AI 推薦與指定公司共用）。
-function JobCard({ m, onPick, pending }: { m: JobMatch; onPick: (m: JobMatch) => void; pending?: boolean }) {
-  return (
-    <Card interactive className="p-4 flex flex-col sm:flex-row gap-4 animate-fade-in-up">
-      <FitBadge score={m.fit_score} />
-      <div className="flex-1 min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <a href={m.job.url} target="_blank" rel="noreferrer"
-            className="font-medium text-slate-900 hover:text-brand-700 hover:underline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">{m.job.title}</a>
-          <Badge tone={m.job.source === "careers" ? "brand" : "slate"}>{SRC_LABEL[m.job.source] || m.job.source}</Badge>
-        </div>
-        <p className="text-sm text-slate-600 mt-0.5">
-          {m.job.company}
-          {m.job.location ? `｜${m.job.location}` : ""}
-          {m.job.salary ? `｜${m.job.salary}` : ""}
-        </p>
-        {m.reason && <p className="text-sm text-slate-700 mt-1">{m.reason}</p>}
-        {m.matched.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {m.matched.map((t, k) => <Badge key={k} tone="emerald">{t}</Badge>)}
-          </div>
-        )}
-      </div>
-      <div className="shrink-0 flex flex-row sm:flex-col gap-2">
-        <Button size="sm" icon={Sparkles} loading={pending} onClick={() => onPick(m)} className="whitespace-nowrap">產生投遞包</Button>
-        <a href={m.job.url} target="_blank" rel="noreferrer"
-          className="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-sm hover:bg-slate-200 transition whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
-          <ExternalLink className="w-3.5 h-3.5" />看原職缺
-        </a>
-      </div>
-    </Card>
-  )
-}
-
-// 一段可分頁的職缺清單（AI 推薦、指定公司各用一個，分頁互不影響）。
-function JobList({ matches, onPick, pickingUrl }:
-  { matches: JobMatch[]; onPick: (m: JobMatch) => void; pickingUrl: string }) {
-  const [page, setPage] = useState(1)
-  useEffect(() => { setPage(1) }, [matches])  // 新一輪結果回到第 1 頁
-  const totalPages = Math.max(1, Math.ceil(matches.length / PAGE_SIZE))
-  const cur = Math.min(page, totalPages)
-  return (
-    <>
-      <div className="space-y-3">
-        {matches.slice((cur - 1) * PAGE_SIZE, cur * PAGE_SIZE).map((m, i) => (
-          <JobCard key={i} m={m} onPick={onPick} pending={!!pickingUrl && m.job.url === pickingUrl} />
-        ))}
-      </div>
-      {matches.length > PAGE_SIZE && (
-        <nav aria-label="職缺分頁" className="flex items-center justify-center gap-1.5 mt-5">
-          <Button variant="secondary" size="sm" icon={ChevronLeft}
-            disabled={cur <= 1} onClick={() => setPage(Math.max(1, cur - 1))}>上一頁</Button>
-          {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
-            <button key={n} onClick={() => setPage(n)} aria-current={n === cur ? "page" : undefined}
-              className={`w-8 h-8 rounded-lg text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${
-                n === cur ? "bg-brand-600 text-white" : "text-slate-600 hover:bg-slate-100"
-              }`}>{n}</button>
-          ))}
-          <Button variant="secondary" size="sm" onClick={() => setPage(Math.min(totalPages, cur + 1))}
-            disabled={cur >= totalPages}>下一頁<ChevronRight className="w-4 h-4" /></Button>
-        </nav>
-      )}
-    </>
-  )
+function mergeSource(arr: SourceStat[], ev: { source: string; count: number; blocked: boolean }): SourceStat[] {
+  const idx = arr.findIndex((x) => x.source === ev.source)
+  if (idx < 0) return [...arr, { source: ev.source, count: ev.count, blocked: ev.blocked }]
+  const copy = [...arr]
+  copy[idx] = { source: ev.source, count: copy[idx].count + ev.count, blocked: copy[idx].blocked && ev.blocked }
+  return copy
 }
 
 export function JobSearchView(
@@ -107,24 +34,21 @@ export function JobSearchView(
   const [done, setDone] = useState(false)
   const [status, setStatus] = useState("")
   const [queries, setQueries] = useState<string[]>([])
-  const [sources, setSources] = useState<{ source: string; count: number; blocked: boolean }[]>([])
+  const [sources, setSources] = useState<SourceStat[]>([])
   const [jobs, setJobs] = useState<JobMatch[]>([])
   const [companyJobs, setCompanyJobs] = useState<JobMatch[]>([])
+  const [rankTotal, setRankTotal] = useState(0)
+  const [minFit, setMinFit] = useState(0)
   const [linkedin, setLinkedin] = useState("")
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [blockedNote, setBlockedNote] = useState("")
   const [fallback, setFallback] = useState(false)
   const [error, setError] = useState("")
   const [skillGap, setSkillGap] = useState<SkillGapReport | null>(null)
-  // 公司名單（選填）：除了 AI 自動找，使用者可加入想盯的公司，獨立區塊顯示。
   const [companies, setCompanies] = useState<string[]>([])
   const [companyInput, setCompanyInput] = useState("")
-  // 上傳的履歷檔：先存著，等使用者按「開始」才送（不再上傳即自動找）。
   const [file, setFile] = useState<File | null>(null)
-  // 這次送出時實際查詢的公司（用於「查無結果」提示，與輸入框內容脫鉤）。
   const [searchedCompanies, setSearchedCompanies] = useState<string[]>([])
-  // 正在抓完整 JD 的職缺網址（該卡片按鈕顯示載入中）。
-  const [pickingUrl, setPickingUrl] = useState("")
 
   // 還原上次搜尋結果：重新整理 / 重開不必重找。
   useEffect(() => {
@@ -147,7 +71,6 @@ export function JobSearchView(
     } catch { /* 忽略毀損快取 */ }
   }, [])  // 僅開啟時還原一次
 
-  // 搜尋完成後保存快照（含結果、技能缺口、來源、profile）。
   useEffect(() => {
     if (!done) return
     try {
@@ -176,8 +99,26 @@ export function JobSearchView(
     }
   }
 
+  async function saveSearch(acc: any, cs: string[]) {
+    if (!acc.jobs.length && !acc.companyJobs.length) return
+    const name = (acc.profile && (acc.profile as Record<string, unknown>).name) || ""
+    const label = [name || "搜尋", acc.queries[0] || ""].filter(Boolean).join(" · ")
+    try {
+      await fetch("/api/searches", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label, profile: acc.profile,
+          payload: {
+            jobs: acc.jobs, companyJobs: acc.companyJobs, skillGap: acc.skillGap,
+            queries: acc.queries, sources: acc.sources, searchedCompanies: cs,
+            linkedin: acc.linkedin, fallback: acc.fallback,
+          },
+        }),
+      })
+    } catch { /* 存檔失敗不影響使用 */ }
+  }
+
   async function go(form: FormData) {
-    // 把尚未變成標籤的輸入也一併送出（並回填成標籤，讓 UI 一致）。
     const trailing = companyInput.trim()
     const cs = trailing ? (companies.includes(trailing) ? companies : [...companies, trailing]) : companies
     if (trailing) { setCompanies(cs); setCompanyInput("") }
@@ -185,35 +126,30 @@ export function JobSearchView(
     setSearchedCompanies(cs)
 
     setBusy(true); setDone(false); setError(""); setJobs([]); setCompanyJobs([]); setQueries([]); setSources([])
-    setLinkedin(""); setProfile(null); setBlockedNote(""); setFallback(false); setSkillGap(null)
+    setLinkedin(""); setProfile(null); setBlockedNote(""); setFallback(false); setSkillGap(null); setRankTotal(0)
     setStatus("上傳中…")
+    // 串流累積（供完成後存檔；state 更新非同步，存檔讀這裡的即時值）。
+    const acc: any = { jobs: [], companyJobs: [], skillGap: null, queries: [], sources: [], linkedin: "", fallback: false, profile: null }
     try {
       const resp = await fetch("/api/jobs/auto", { method: "POST", body: form })
       await readSSE(resp, (ev) => {
         if (ev.type === "progress") setStatus(ev.message)
-        else if (ev.type === "profile") { setProfile(ev.data as UserProfile); onProfile?.(ev.data as UserProfile) }
-        else if (ev.type === "queries") setQueries(ev.queries)
-        else if (ev.type === "source")
-          // 後端會搜尋前 2 個關鍵字、再加每間指定公司，同一來源會回報多次 → 依來源彙整。
-          setSources((s) => {
-            const idx = s.findIndex((x) => x.source === ev.source)
-            if (idx < 0) return [...s, { source: ev.source, count: ev.count, blocked: ev.blocked }]
-            const copy = [...s]
-            copy[idx] = {
-              source: ev.source,
-              count: copy[idx].count + ev.count,
-              blocked: copy[idx].blocked && ev.blocked,
-            }
-            return copy
-          })
+        else if (ev.type === "profile") { acc.profile = ev.data; setProfile(ev.data as UserProfile); onProfile?.(ev.data as UserProfile) }
+        else if (ev.type === "queries") { acc.queries = ev.queries; setQueries(ev.queries) }
+        else if (ev.type === "source") { acc.sources = mergeSource(acc.sources, ev); setSources((s) => mergeSource(s, ev)) }
         else if (ev.type === "all_blocked") setBlockedNote(ev.message)
-        else if (ev.type === "jobs") { setJobs(ev.data as JobMatch[]); setFallback(Boolean(ev.fallback)) }
-        else if (ev.type === "company_jobs") setCompanyJobs(ev.data as JobMatch[])
-        else if (ev.type === "skill_gap") setSkillGap(ev.data as SkillGapReport)
-        else if (ev.type === "linkedin") setLinkedin(ev.url)
+        else if (ev.type === "rank_start") { acc.fallback = Boolean(ev.fallback); setFallback(Boolean(ev.fallback)); setRankTotal(ev.total || 0); acc.jobs = []; setJobs([]) }
+        else if (ev.type === "ranked_batch") {
+          acc.jobs = sortByFit([...acc.jobs, ...(ev.data as JobMatch[])])
+          setJobs(acc.jobs)
+        }
+        else if (ev.type === "company_jobs") { acc.companyJobs = sortByFit(ev.data as JobMatch[]); setCompanyJobs(acc.companyJobs) }
+        else if (ev.type === "skill_gap") { acc.skillGap = ev.data; setSkillGap(ev.data as SkillGapReport) }
+        else if (ev.type === "linkedin") { acc.linkedin = ev.url; setLinkedin(ev.url) }
         else if (ev.type === "error") setError(ev.message)
         else if (ev.type === "done") setDone(true)
       })
+      await saveSearch(acc, cs)  // 自動存進「搜尋紀錄」
     } catch {
       setError("連線發生問題，請確認伺服器是否啟動。")
     } finally {
@@ -221,7 +157,6 @@ export function JobSearchView(
     }
   }
 
-  // 按「開始自動找職缺」：有上傳檔就送檔，否則送貼上的文字。上傳檔本身不會自動開跑。
   function onStart() {
     const form = new FormData()
     if (file) {
@@ -238,47 +173,11 @@ export function JobSearchView(
     setFile(f); setError(""); e.target.value = ""
   }
 
-  function buildJd(j: JobPosting): string {
-    return [
-      j.title,
-      `公司：${j.company}`,
-      j.location ? `地點：${j.location}` : "",
-      j.salary ? `薪資：${j.salary}` : "",
-      "",
-      j.snippet || "",
-      j.requirements.length ? `\n需求：${j.requirements.join("、")}` : "",
-    ].filter(Boolean).join("\n")
-  }
+  const pick = async (m: JobMatch) => onPick(await resolveJd(m.job), profile)
 
-  // 產生投遞包前，先抓該職缺網址的「完整 JD」（104 走官方 content API），
-  // 抓不到才退回搜尋摘要——搜尋結果的 snippet 只有開頭一小段。
-  async function pick(m: JobMatch) {
-    const j = m.job
-    let jd = buildJd(j)
-    if (j.url) {
-      setPickingUrl(j.url)
-      try {
-        const r = await fetch("/api/jd/fetch", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: j.url }),
-        })
-        if (r.ok) {
-          const d = await r.json()
-          if (d.text && d.text.length > (j.snippet?.length || 0)) {
-            const head = [
-              d.title || j.title,
-              `公司：${d.company || j.company}`,
-              j.location ? `地點：${j.location}` : "",
-              j.salary ? `薪資：${j.salary}` : "",
-            ].filter(Boolean).join("\n")
-            jd = `${head}\n\n${d.text}`
-          }
-        }
-      } catch { /* 抓不到就用搜尋摘要 */ }
-      setPickingUrl("")
-    }
-    onPick(jd, profile)
-  }
+  const visibleJobs = jobs.filter((m) => m.fit_score >= minFit)
+  const visibleCompany = companyJobs.filter((m) => m.fit_score >= minFit)
+  const hiddenCount = (jobs.length - visibleJobs.length) + (companyJobs.length - visibleCompany.length)
 
   return (
     <div>
@@ -408,13 +307,24 @@ export function JobSearchView(
         )
       })()}
 
-      {/* ① AI 依履歷推薦 */}
-      {jobs.length > 0 && (
-        <div className="flex items-center justify-between mb-3">
+      {/* 適配度門檻 + 進度（有結果或排序中才顯示） */}
+      {(jobs.length > 0 || (busy && rankTotal > 0)) && (
+        <div className="flex flex-wrap items-center gap-3 mb-3">
           <h2 className="font-semibold flex items-center gap-2">
             AI 推薦職缺（依適配度排序）
             {fallback && <Badge tone="amber">範例資料</Badge>}
           </h2>
+          {busy && rankTotal > 0 && (
+            <span className="text-sm text-slate-500 inline-flex items-center gap-1">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />已評分 {jobs.length} / {rankTotal}
+            </span>
+          )}
+          <label className="ml-auto flex items-center gap-2 text-sm text-slate-500">
+            只看 ≥ <span className="font-medium text-slate-700 w-7 text-right">{minFit}</span>
+            <input type="range" min={0} max={90} step={10} value={minFit}
+              onChange={(e) => setMinFit(Number(e.target.value))}
+              aria-label="最低適配度門檻" className="w-32 accent-brand-600" />
+          </label>
           {linkedin && (
             <a href={linkedin} target="_blank" rel="noreferrer"
               className="text-sm text-brand-600 hover:underline inline-flex items-center gap-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
@@ -455,17 +365,22 @@ export function JobSearchView(
         </Card>
       )}
 
-      {jobs.length > 0 && <JobList matches={jobs} onPick={pick} pickingUrl={pickingUrl} />}
+      {visibleJobs.length > 0 && <JobList matches={visibleJobs} onPick={pick} />}
+      {jobs.length > 0 && visibleJobs.length === 0 && (
+        <p className="text-sm text-slate-400">目前門檻（≥ {minFit}）沒有符合的職缺，往左拉低門檻看看。</p>
+      )}
 
-      {/* ② 指定公司的職缺（獨立區塊、獨立排序） */}
+      {/* 指定公司的職缺（獨立區塊、獨立排序） */}
       {(companyJobs.length > 0 || (done && searchedCompanies.length > 0)) && (
         <div className="mt-8">
           <h2 className="font-semibold flex items-center gap-2 mb-3">
             <Building2 className="w-4 h-4 text-brand-600" />指定公司的職缺（依適配度排序）
             {searchedCompanies.length > 0 && <span className="text-sm font-normal text-slate-400">{searchedCompanies.join("、")}</span>}
           </h2>
-          {companyJobs.length > 0 ? (
-            <JobList matches={companyJobs} onPick={pick} pickingUrl={pickingUrl} />
+          {visibleCompany.length > 0 ? (
+            <JobList matches={visibleCompany} onPick={pick} />
+          ) : companyJobs.length > 0 ? (
+            <p className="text-sm text-slate-400">目前門檻（≥ {minFit}）沒有符合的公司職缺。</p>
           ) : (
             <Card className="p-2">
               <EmptyState icon={Building2} title="指定公司目前查無相關開缺"
@@ -473,6 +388,10 @@ export function JobSearchView(
             </Card>
           )}
         </div>
+      )}
+
+      {hiddenCount > 0 && (
+        <p className="text-xs text-slate-400 mt-3">已依「≥ {minFit} 分」隱藏 {hiddenCount} 筆較低適配職缺。</p>
       )}
     </div>
   )

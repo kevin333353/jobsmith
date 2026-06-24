@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, UploadFile, Body
@@ -14,7 +15,7 @@ from langgraph.types import Command
 from app import settings
 from app.cli import load_profile
 from app.graph import build_graph
-from app.models import Profile
+from app.models import Profile, JobMatch
 from app.intake.resume_parser import extract_text
 from app.agents.resume_eval import structure_profile, evaluate_resume
 from app.agents.job_search import derive_queries, rank_jobs
@@ -24,6 +25,7 @@ from app.sources.registry import search_all, linkedin_search_url
 from app.store import db as _appdb
 from app.store import history as _history
 from app.store import memory as _memory
+from app.store import searches as _searches
 
 app = FastAPI(title="台灣 AI 求職 Co-pilot")
 
@@ -151,6 +153,26 @@ def resume_evaluate(
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+_RANK_BATCH = 12  # 每批送 LLM 排序的職缺數（批小→首批更快出現）
+
+
+def _rank_in_batches(profile, jobs, batch: int = _RANK_BATCH, workers: int = 4):
+    """把職缺切批、並行送 rank_jobs，哪批先完成就先 yield（供 SSE 邊排邊推）。
+
+    並行多個 CLI 子行程：總時間≈一批，且首批很快就回；單批失敗該批以未評分(0)回，不中斷。
+    """
+    chunks = [jobs[i:i + batch] for i in range(0, len(jobs), batch)]
+    if not chunks:
+        return
+    with ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as ex:
+        futs = {ex.submit(rank_jobs, profile, c, None): c for c in chunks}
+        for fut in as_completed(futs):
+            try:
+                yield fut.result()
+            except Exception:  # noqa: BLE001 — 單批失敗不影響其他批
+                yield [JobMatch(job=j, fit_score=0, reason="未評分") for j in futs[fut]]
+
+
 def _parse_companies(raw: str) -> list[str]:
     """把使用者填的公司名單字串（逗號/頓號/換行分隔）切成乾淨清單，去重保序。"""
     import re
@@ -217,17 +239,19 @@ def jobs_auto(
                                        "並請改用下方 LinkedIn / 104 直連搜尋。"})
                 resume_jobs = _load_fallback_jobs()
 
-            # ① AI 依履歷找到的職缺：獨立排序、獨立顯示。
-            yield _sse({"type": "progress", "step": "rank",
-                        "message": f"依履歷排序 {len(resume_jobs)} 筆職缺…"})
-            matches = rank_jobs(profile, resume_jobs, top_k=None)  # 不設限，全部排序回傳（前端分頁）
-            yield _sse({"type": "jobs", "data": [m.model_dump() for m in matches],
-                        "fallback": used_fallback})
+            # ① AI 依履歷找到的職缺：分批『並行』排序、逐批串流給前端（邊收邊排序/篩選），
+            # 不必等全部跑完；批次以穩定鍵排序，讓同一輸入分批一致。
+            resume_jobs.sort(key=lambda j: j.url or (j.title + j.company))
+            yield _sse({"type": "rank_start", "total": len(resume_jobs), "fallback": used_fallback})
+            matches = []
+            for batch in _rank_in_batches(profile, resume_jobs):
+                matches.extend(batch)
+                yield _sse({"type": "ranked_batch", "data": [m.model_dump() for m in batch]})
             from app.agents.skill_gap import analyze_skill_gap
             # 技能缺口只看「與履歷相關」的高適配職缺，避免行銷/業務等無關職缺污染缺口清單。
             relevant_jobs = [m.job for m in matches if m.fit_score >= 50]
             if len(relevant_jobs) < 5:
-                relevant_jobs = [m.job for m in matches[:15]]
+                relevant_jobs = [m.job for m in sorted(matches, key=lambda x: -x.fit_score)[:15]]
             gap = analyze_skill_gap(profile, relevant_jobs)
             if gap.top_demand:
                 yield _sse({"type": "skill_gap", "data": gap.model_dump()})
@@ -561,6 +585,37 @@ def history_get(pid: int):
 @app.delete("/api/history/{pid}")
 def history_delete(pid: int):
     _history.delete_package(pid)
+    return {"ok": True}
+
+
+class SearchSaveBody(BaseModel):
+    label: str = ""
+    profile: dict | None = None
+    payload: dict = {}
+
+
+@app.post("/api/searches")
+def searches_save(body: SearchSaveBody):
+    sid = _searches.save_search(body.label, body.profile, body.payload or {})
+    return {"id": sid}
+
+
+@app.get("/api/searches")
+def searches_list():
+    return {"searches": _searches.list_searches()}
+
+
+@app.get("/api/searches/{sid}")
+def searches_get(sid: int):
+    s = _searches.get_search(sid)
+    if s is None:
+        return JSONResponse({"error": "找不到該搜尋紀錄"}, status_code=404)
+    return s
+
+
+@app.delete("/api/searches/{sid}")
+def searches_delete(sid: int):
+    _searches.delete_search(sid)
     return {"ok": True}
 
 

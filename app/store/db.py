@@ -32,6 +32,10 @@ def _init(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS user_memory("
         "id INTEGER PRIMARY KEY CHECK (id=1), profile_json TEXT, preferences_json TEXT, updated_at TEXT)")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS searches("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, label TEXT, "
+        "ai_count INTEGER, company_count INTEGER, profile_json TEXT, payload_json TEXT)")
     conn.commit()
 
 
