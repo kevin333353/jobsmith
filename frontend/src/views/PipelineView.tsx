@@ -9,7 +9,7 @@ import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
 import { EmptyState } from "../ui/EmptyState"
 import {
-  Sparkles, Network, ArrowLeft, AlertTriangle, CheckCircle2, RefreshCw, Printer,
+  Sparkles, Network, ArrowLeft, AlertTriangle, CheckCircle2, RefreshCw, Printer, LinkIcon,
 } from "../ui/icons"
 
 type Phase = "idle" | "running" | "approval" | "done"
@@ -19,6 +19,9 @@ export function PipelineView(
   { seed?: Seed | null; fallbackProfile?: UserProfile | null; onBack?: () => void },
 ) {
   const [jd, setJd] = useState("")
+  const [url, setUrl] = useState("")
+  const [fetching, setFetching] = useState(false)
+  const [fetchErr, setFetchErr] = useState("")
   const [phase, setPhase] = useState<Phase>("idle")
   const [status, setStatus] = useState("")
   const [done, setDone] = useState<string[]>([])
@@ -89,6 +92,26 @@ export function PipelineView(
     setJd(j.jd_text)
   }
 
+  // 貼職缺網址 → 後端抽取 JD 文字（104 走官方 API，其餘通用抽取）→ 填入文字框。
+  async function fetchUrl() {
+    if (!url.trim() || fetching) return
+    setFetching(true); setFetchErr("")
+    try {
+      const r = await fetch("/api/jd/fetch", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setFetchErr(d.error || "抓取失敗，請改貼 JD 文字。"); return }
+      const head = [d.title, d.company ? `公司：${d.company}` : ""].filter(Boolean).join("\n")
+      setJd((head ? head + "\n\n" : "") + (d.text || ""))
+    } catch {
+      setFetchErr("連線發生問題，請改貼 JD 文字。")
+    } finally {
+      setFetching(false)
+    }
+  }
+
   // 從「自動找職缺」點選某職缺帶 JD + 真實履歷進來 → 自動開跑（投遞包用本人背景）
   useEffect(() => {
     if (seed?.jd) { setJd(seed.jd); run(seed.jd, seed.profile) }
@@ -109,9 +132,23 @@ export function PipelineView(
         </button>
       )}
       <Card className="no-print mb-4 p-5">
+        <div className="flex gap-2 mb-3">
+          <div className="relative flex-1">
+            <LinkIcon className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") fetchUrl() }}
+              placeholder="貼職缺網址（104 或一般網頁）自動抓取 JD…"
+              className="w-full border border-slate-300 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
+            />
+          </div>
+          <Button variant="secondary" icon={LinkIcon} loading={fetching} onClick={fetchUrl}>抓取</Button>
+        </div>
+        {fetchErr && <p className="text-sm text-amber-600 mb-2">{fetchErr}</p>}
         <textarea
           className="w-full border border-slate-300 rounded-lg p-3 text-sm h-32 focus:outline-none focus:ring-2 focus:ring-brand-200"
-          placeholder="貼上職缺 JD 文字…"
+          placeholder="或直接貼上職缺 JD 文字…"
           value={jd}
           onChange={(e) => setJd(e.target.value)}
         />

@@ -214,6 +214,23 @@ def sample():
     return {"jd_text": jd}
 
 
+class JDFetchBody(BaseModel):
+    url: str
+
+
+@app.post("/api/jd/fetch")
+def jd_fetch_endpoint(body: JDFetchBody):
+    """貼職缺網址 → 抽取 JD 文字（104 走官方 content API，其餘走通用 HTML 抽取）。"""
+    from app.intake.jd_fetch import fetch_jd, JDFetchError
+    try:
+        res = fetch_jd(body.url)
+    except JDFetchError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception:
+        return JSONResponse({"error": "抓取失敗，請改貼 JD 文字。"}, status_code=400)
+    return {"title": res.title, "company": res.company, "text": res.text, "source": res.source}
+
+
 def _backend_available(name: str) -> bool:
     """偵測該後端是否可用：CLI 看執行檔在不在 PATH；anthropic 看有沒有金鑰。"""
     if name == "claude_cli":
