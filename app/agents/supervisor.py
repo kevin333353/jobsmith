@@ -76,8 +76,10 @@ def supervise_after_critic(critique: CritiqueReport, revision_count: int,
         d = llm.invoke([("system", SUP_CRITIC_SYSTEM), ("human", human)])
         if d.next_action not in ("approve", "revise"):
             return _critic_fallback(critique)
-        if d.next_action == "revise":  # 過濾非法文件鍵
+        if d.next_action == "revise":
             d.docs_to_revise = [x for x in d.docs_to_revise if x in _ALL_DOCS]
+            if not d.docs_to_revise:  # revise 但沒指明任何有效文件 → 退回備援，避免空轉重寫
+                return _critic_fallback(critique)
         return d
     except Exception:
         return _critic_fallback(critique)

@@ -1,8 +1,11 @@
-"""逐次 LLM 呼叫的 token / 成本蒐集（供 agent telemetry 用）。
+"""逐節點 LLM 用量（token / 成本）蒐集。
 
-單人本機假設：用 contextvar 隔離每次 run 的蒐集器（同一執行緒內的 graph 節點共用）。
-後端（claude_cli）在每次 LLM 呼叫時 record_llm(...)；graph 的 _safe 以 marker()/drain_since()
-取出單一節點期間累積的 token/成本，連同延遲寫進 state 的 telemetry 通道。
+設計（修正 M9 審查發現的兩個 bug）：
+- 不靠「整條 run 共用一個蒐集器」——那個 contextvar 在 Starlette 把同步 SSE 產生器丟
+  threadpool 時，會在每次 next() 進到新複製的 context 而遺失（只有第一個節點記得到）。
+- 改成「每個節點自己開一個蒐集器」：graph._safe 在節點開始時 begin_node()（在該節點自身的
+  context 設一個新 list），節點內的 LLM 呼叫 record_llm() 寫進去，結束時 end_node() 彙整並還原。
+  因為平行生成節點各自跑在 copy_context() 的獨立 context，彼此的蒐集器天然隔離（不會互相灌數字）。
 """
 from __future__ import annotations
 
@@ -19,33 +22,29 @@ class LLMCall:
     cost_usd: float = 0.0
 
 
-def start_run() -> None:
-    """在一次 run 開始時呼叫（重置蒐集器）。"""
-    _SINK.set([])
+def begin_node():
+    """節點開始：在本節點 context 開新蒐集器，回傳 token 供 end_node 還原。"""
+    return _SINK.set([])
+
+
+def end_node(token) -> dict:
+    """節點結束：彙整本節點蒐集到的用量並還原 context（呼叫前的狀態）。"""
+    sink = _SINK.get() or []
+    usage = {
+        "calls": len(sink),
+        "input_tokens": sum(c.input_tokens for c in sink),
+        "output_tokens": sum(c.output_tokens for c in sink),
+        "cost_usd": round(sum(c.cost_usd for c in sink), 6),
+    }
+    try:
+        _SINK.reset(token)
+    except (ValueError, LookupError):  # token 屬於別的 context（理論上不會）：保險忽略
+        pass
+    return usage
 
 
 def record_llm(input_tokens: int = 0, output_tokens: int = 0, cost_usd: float = 0.0) -> None:
-    """後端每次 LLM 呼叫後回報用量（沒有作用中的 run 則略過）。"""
+    """後端每次 LLM 呼叫後回報用量；不在節點蒐集區間內（sink=None）則略過。"""
     sink = _SINK.get()
     if sink is not None:
         sink.append(LLMCall(int(input_tokens or 0), int(output_tokens or 0), float(cost_usd or 0.0)))
-
-
-def marker() -> int:
-    """回傳目前蒐集器長度，供節點起算。"""
-    sink = _SINK.get()
-    return len(sink) if sink is not None else 0
-
-
-def drain_since(mark: int) -> dict:
-    """彙總自 mark 起新增的 LLM 呼叫用量。"""
-    sink = _SINK.get()
-    if sink is None:
-        return {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
-    items = sink[mark:]
-    return {
-        "calls": len(items),
-        "input_tokens": sum(c.input_tokens for c in items),
-        "output_tokens": sum(c.output_tokens for c in items),
-        "cost_usd": round(sum(c.cost_usd for c in items), 6),
-    }

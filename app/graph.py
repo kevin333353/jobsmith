@@ -36,14 +36,18 @@ _ALL_DOCS = {"resume", "cover_letter", "interview"}
 
 
 def _safe(state: CopilotState, node: str, key: str, fn, fallback):
-    """執行 agent；記錄延遲/token/成本 telemetry；失敗時回降級 artifact + error，不炸整條圖。"""
-    mark = telemetry.marker()
+    """執行 agent；記錄延遲/token/成本 telemetry；失敗時回降級 artifact + error，不炸整條圖。
+
+    用 begin_node/end_node 在「本節點自身的 context」開蒐集器：跨 SSE threadpool 邊界仍有效，
+    且平行生成節點各自隔離（不互相灌 token）。
+    """
+    token = telemetry.begin_node()
     t0 = time.perf_counter()
     try:
         out = {key: fn()}
     except Exception as exc:  # noqa: BLE001 — 任何 agent 例外都要優雅降級
         out = {key: fallback, "errors": [{"node": node, "message": str(exc)[:200]}]}
-    usage = telemetry.drain_since(mark)
+    usage = telemetry.end_node(token)
     out["telemetry"] = [{"node": node,
                          "latency_ms": int((time.perf_counter() - t0) * 1000),
                          **usage}]
@@ -196,9 +200,14 @@ def route_match_decision(state: CopilotState) -> str:
 
 
 def route_critic_decision(state: CopilotState) -> str:
-    """依 supervisor 決策路由 revise / approve（上限保底已在 supervise_after_critic 處理）。"""
+    """依 supervisor 決策路由 revise / approve（上限保底已在 supervise_after_critic 處理）。
+
+    防呆：revise 但實際算不出要重寫哪份文件（_targets 空）→ 視為 approve，避免空轉重寫。
+    """
     decision = state.get("supervisor_decision")
-    return "revise" if decision and decision.next_action == "revise" else "approve"
+    if decision and decision.next_action == "revise" and _targets(state):
+        return "revise"
+    return "approve"
 
 
 def _default_db_path() -> str:

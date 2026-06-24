@@ -200,6 +200,25 @@ def test_run_emits_per_node_telemetry(monkeypatch):
     assert "parse" in nodes and "match" in nodes
 
 
+def test_run_telemetry_attributes_tokens_to_correct_node(monkeypatch):
+    # 回歸：非首節點的 token 也要記到（修 contextvar 跨 SSE threadpool yield 遺失的 bug）
+    from app import telemetry as tele
+    _patch_agents(monkeypatch)
+
+    def match_with_usage(job, profile):
+        tele.record_llm(input_tokens=100, output_tokens=50, cost_usd=0.01)
+        return MatchReport(score=82, recommend_proceed=True, reason="吻合")
+    monkeypatch.setattr(graph_mod, "match_profile", match_with_usage)
+
+    client = TestClient(server_mod.app)
+    r = client.post("/api/run", json={"jd_text": "JD", "profile": {"name": "x", "summary": "y"}})
+    tel = {e["node"]: e for e in _parse_sse(r.text) if e["type"] == "telemetry"}
+    assert tel["match"]["input_tokens"] == 100   # match 是非首節點，仍正確歸帳
+    assert tel["match"]["output_tokens"] == 50
+    assert tel["match"]["calls"] == 1
+    assert tel["parse"]["input_tokens"] == 0     # 未呼叫 record 的節點為 0，無交叉計數
+
+
 def test_jobs_auto_falls_back_when_all_blocked(monkeypatch):
     from app.models import Profile, JobMatch, SearchResult
     monkeypatch.setattr(server_mod, "structure_profile",

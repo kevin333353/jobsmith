@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from langgraph.types import Command
 
-from app import settings, telemetry
+from app import settings
 from app.cli import load_profile
 from app.graph import build_graph
 from app.models import Profile
@@ -51,8 +51,11 @@ def _sse(obj: dict) -> str:
 
 
 def _stream(graph_input, config):
-    """跑 graph.stream(updates)，逐節點 yield SSE；結束時判斷是否停在 interrupt。"""
-    telemetry.start_run()  # 在跑 graph 的這條執行緒重置 LLM 用量蒐集器
+    """跑 graph.stream(updates)，逐節點 yield SSE；結束時判斷是否停在 interrupt。
+
+    telemetry 由每個節點的 _safe 自行 begin/end（不在這裡 start_run——同步產生器被
+    Starlette 丟 threadpool 時 contextvar 不跨 next() 存活，集中式蒐集會掉資料）。
+    """
     for chunk in GRAPH.stream(graph_input, config, stream_mode="updates"):
         for node, update in chunk.items():
             if node == "__interrupt__":
