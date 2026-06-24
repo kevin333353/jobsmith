@@ -57,3 +57,15 @@ def test_network_error_wrapped(monkeypatch):
     monkeypatch.setattr(jd_fetch, "_http_html", boom)
     with pytest.raises(jd_fetch.JDFetchError):
         jd_fetch.fetch_jd("https://example.com/x")
+
+
+def test_blocks_loopback_ssrf():
+    # SSRF 防護：loopback 位址在發出任何請求前就被擋（_guard_host 走真實 getaddrinfo）
+    with pytest.raises(jd_fetch.JDFetchError):
+        jd_fetch.fetch_jd("http://127.0.0.1:8000/admin")
+
+
+def test_blocks_cloud_metadata_ssrf():
+    # link-local 169.254.169.254（雲端 metadata）必須被擋
+    with pytest.raises(jd_fetch.JDFetchError):
+        jd_fetch.fetch_jd("http://169.254.169.254/latest/meta-data/")

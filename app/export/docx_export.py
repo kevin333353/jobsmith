@@ -36,39 +36,51 @@ def _set_cjk_font(doc: Document) -> None:
 
 
 def _bullets(doc: Document, items) -> None:
-    for it in items or []:
+    if not isinstance(items, (list, tuple)):
+        return
+    for it in items:
         if str(it).strip():
             doc.add_paragraph(str(it), style="List Bullet")
 
 
+def _section(pkg: dict, key: str) -> dict:
+    """安全取出區塊：非 dict（字串/list/None）一律視為缺，不拋例外。"""
+    v = pkg.get(key)
+    return v if isinstance(v, dict) else {}
+
+
 def build_docx(pkg: dict) -> bytes:
+    if not isinstance(pkg, dict):
+        pkg = {}
     doc = Document()
     _set_cjk_font(doc)
 
-    doc.add_heading(pkg.get("job_title") or "求職投遞包", level=0)
+    doc.add_heading(str(pkg.get("job_title") or "求職投遞包"), level=0)
     if pkg.get("company"):
-        doc.add_paragraph(pkg["company"])
+        doc.add_paragraph(str(pkg["company"]))
 
-    resume = pkg.get("resume")
+    resume = _section(pkg, "resume")
     if resume:
         doc.add_heading("客製履歷", level=1)
         if resume.get("summary"):
-            doc.add_paragraph(resume["summary"])
+            doc.add_paragraph(str(resume["summary"]))
         _bullets(doc, resume.get("bullets"))
         hits = resume.get("ats_keywords_hit")
-        if hits:
-            doc.add_paragraph("ATS 命中關鍵字：" + "、".join(hits))
+        if isinstance(hits, (list, tuple)):
+            cleaned = [str(h) for h in hits if str(h).strip()]
+            if cleaned:
+                doc.add_paragraph("ATS 命中關鍵字：" + "、".join(cleaned))
 
-    cover = pkg.get("cover_letter")
+    cover = _section(pkg, "cover_letter")
     if cover:
         doc.add_heading("求職信", level=1)
         if cover.get("subject"):
             p = doc.add_paragraph()
-            p.add_run("主旨：" + cover["subject"]).bold = True
-        for line in (cover.get("body") or "").split("\n"):
+            p.add_run("主旨：" + str(cover["subject"])).bold = True
+        for line in str(cover.get("body") or "").split("\n"):
             doc.add_paragraph(line)
 
-    interview = pkg.get("interview")
+    interview = _section(pkg, "interview")
     if interview:
         doc.add_heading("面試準備", level=1)
         for label, key in _INTERVIEW_SECTIONS:

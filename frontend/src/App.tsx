@@ -41,7 +41,8 @@ export default function App() {
             <button
               key={id}
               onClick={() => setTab(id)}
-              className={`inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg transition ${
+              aria-current={tab === id ? "page" : undefined}
+              className={`inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
                 tab === id
                   ? "bg-brand-600 text-white shadow-sm"
                   : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"

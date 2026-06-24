@@ -32,3 +32,14 @@ def test_docx_contains_text():
 def test_build_docx_empty_pkg():
     data = build_docx({})
     assert data[:2] == b"PK"  # 空包也要產出有效檔，不丟例外
+
+
+def test_build_docx_tolerates_bad_shapes():
+    # 子欄位非 dict（前端可能送錯/被編輯成奇怪形狀）→ 不拋例外，仍產出有效檔
+    data = build_docx({
+        "job_title": ["不是字串"],
+        "resume": "其實是字串",
+        "cover_letter": [],
+        "interview": None,
+    })
+    assert data[:2] == b"PK"

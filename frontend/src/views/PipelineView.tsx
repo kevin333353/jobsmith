@@ -35,6 +35,7 @@ export function PipelineView(
   const [error, setError] = useState("")
   const [editing, setEditing] = useState(false)
   const [edited, setEdited] = useState<EditablePackage | null>(null)
+  const [wantPrint, setWantPrint] = useState(false)
 
   function handle(ev: any) {
     if (ev.type === "start") {
@@ -78,6 +79,8 @@ export function PipelineView(
   }
 
   async function decide(decision: "y" | "n") {
+    // 退回重做會重新生成成品 → 丟棄上一輪的編輯，避免舊編輯值靜默覆蓋新成品。
+    if (decision === "n") { setEditing(false); setEdited(null) }
     setPhase("running"); setStatus(decision === "y" ? "核可中…" : "退回中…")
     try {
       const resp = await fetch("/api/resume", {
@@ -167,6 +170,12 @@ export function PipelineView(
     }
   }
 
+  // 列印前先退出編輯模式（編輯值已存在 edited，唯讀檢視仍顯示），避免印出 textarea。
+  function printDocs() { setEditing(false); setWantPrint(true) }
+  useEffect(() => {
+    if (wantPrint) { setWantPrint(false); window.print() }
+  }, [wantPrint])
+
   // 從「自動找職缺」點選某職缺帶 JD + 真實履歷進來 → 自動開跑（投遞包用本人背景）
   useEffect(() => {
     if (seed?.jd) { setJd(seed.jd); run(seed.jd, seed.profile) }
@@ -219,7 +228,7 @@ export function PipelineView(
                 {editing ? "完成編輯" : "編輯"}
               </Button>
               <Button variant="secondary" icon={FileDown} onClick={downloadDocx}>下載 Word</Button>
-              <Button variant="secondary" icon={Printer} onClick={() => window.print()}>列印 / 匯出 PDF</Button>
+              <Button variant="secondary" icon={Printer} onClick={printDocs}>列印 / 匯出 PDF</Button>
             </>
           )}
         </div>

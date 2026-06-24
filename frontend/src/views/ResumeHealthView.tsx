@@ -63,9 +63,9 @@ export function ResumeHealthView({ onProfile }: { onProfile?: (p: UserProfile) =
         <div className="flex flex-wrap gap-2 mt-3 items-center">
           <Button onClick={onSubmitText} loading={busy} icon={Gauge}>開始健檢</Button>
           <Button variant="secondary" onClick={() => setText(SAMPLE_RESUME)} disabled={busy}>載入範例履歷</Button>
-          <label className={`inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>
+          <label className={`inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition cursor-pointer focus-within:ring-2 focus-within:ring-brand-300 ${busy ? "opacity-50 pointer-events-none" : ""}`}>
             <Upload className="w-4 h-4" />上傳檔案（PDF/DOCX/TXT）
-            <input type="file" accept=".pdf,.docx,.txt" className="hidden" onChange={onFile} disabled={busy} />
+            <input type="file" accept=".pdf,.docx,.txt" className="sr-only" onChange={onFile} disabled={busy} />
           </label>
           {busy && status && (
             <span className="text-sm text-slate-500 inline-flex items-center gap-1">

@@ -22,20 +22,41 @@ const CRITIC: NodeDef = { key: "critic", label: "⑥ 品管 / 反思", icon: Shi
 const SUP_CRITIC: NodeDef = { key: "supervisor_critic", label: "Supervisor · 核可 / 重寫", icon: Sparkles, kind: "decision" }
 const GATE: NodeDef = { key: "human_gate", label: "⑦ 人工核可", icon: CheckCircle2, kind: "gate" }
 
-// 拓樸順序（供「目前進行中」推斷）
-const ORDER = [
-  PARSE, MATCH, SUP_MATCH, COMPANY, ...GEN, CRITIC, SUP_CRITIC, GATE,
-].map((n) => n.key)
 const GEN_KEYS = GEN.map((n) => n.key)
 
 type Status = "pending" | "active" | "done" | "error"
+
+// 「目前進行中」依實際完成順序推斷（非集合成員），故反思迴圈重跑同節點時仍能正確亮 active。
+function computeActive(done: string[], running: boolean): Set<string> {
+  if (!running) return new Set()
+  if (!done.length) return new Set(["parse"])
+  const last = done[done.length - 1]
+  const one = (k: string) => new Set([k])
+  switch (last) {
+    case "parse": return one("match")
+    case "match": return one("supervisor_match")
+    case "supervisor_match": return one("company_research")
+    case "join": return one("critic")
+    case "critic": return one("supervisor_critic")
+    case "supervisor_critic": return one("human_gate")
+    case "human_gate": return new Set()
+  }
+  // company_research 或某生成節點完成 → 本輪尚未完成的生成節點並行 active；都完成則換 critic
+  if (last === "company_research" || GEN_KEYS.includes(last)) {
+    const ci = done.lastIndexOf("company_research")
+    const doneGen = new Set(done.slice(ci + 1).filter((k) => GEN_KEYS.includes(k)))
+    const remaining = GEN_KEYS.filter((k) => !doneGen.has(k))
+    return new Set(remaining.length ? remaining : ["critic"])
+  }
+  return new Set()
+}
 
 function statusStyle(s: Status) {
   switch (s) {
     case "done": return "bg-emerald-500/15 text-emerald-300 ring-emerald-400/30"
     case "active": return "bg-brand-500/25 text-brand-100 ring-brand-300/60 animate-pulse-node"
     case "error": return "bg-amber-500/15 text-amber-300 ring-amber-400/30"
-    default: return "bg-white/5 text-slate-500 ring-white/10"
+    default: return "bg-white/5 text-slate-400 ring-white/10"
   }
 }
 
@@ -78,7 +99,7 @@ function NodeRow(
       </div>
       <div className="flex-1 pb-3 pt-1.5">
         <p className={`text-sm leading-tight ${
-          status === "pending" ? "text-slate-500" : "text-slate-100"
+          status === "pending" ? "text-slate-400" : "text-slate-100"
         } ${node.kind === "decision" ? "text-brand-200" : ""}`}>
           {node.label}
         </p>
@@ -138,14 +159,11 @@ export function AgentTrace(
   )
   const hasTelem = byNode.size > 0
 
-  const firstPending = running ? ORDER.find((k) => !seen.has(k)) : undefined
+  const active = computeActive(done, running)
   function statusOf(key: string): Status {
+    if (active.has(key)) return "active"   // active 優先於 done：反思重跑時同節點會再次亮起
     if (errSet.has(key)) return "error"
     if (seen.has(key)) return "done"
-    if (running) {
-      if (GEN_KEYS.includes(key) && seen.has("company_research")) return "active"
-      if (key === firstPending) return "active"
-    }
     return "pending"
   }
 
