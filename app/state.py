@@ -23,3 +23,5 @@ class CopilotState(TypedDict):
     # 優雅降級：任一節點 agent 失敗時附加 {node, message}，不中斷整條流程。
     # 用 operator.add 當 reducer，平行生成節點同時失敗也不會互蓋。
     errors: Annotated[list[dict], operator.add]
+    # 逐節點 telemetry：{node, latency_ms, calls, input_tokens, output_tokens, cost_usd}。
+    telemetry: Annotated[list[dict], operator.add]

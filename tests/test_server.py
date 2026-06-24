@@ -178,6 +178,20 @@ def test_run_no_warning_when_real_profile(monkeypatch):
     assert not any(e["type"] == "profile_warning" for e in events)
 
 
+def test_run_emits_per_node_telemetry(monkeypatch):
+    # 每個經 _safe 的節點都應發 telemetry 事件（含延遲；mock 下 token=0）
+    _patch_agents(monkeypatch)
+    client = TestClient(server_mod.app)
+    r = client.post("/api/run", json={
+        "jd_text": "JD", "profile": {"name": "真人", "summary": "工程師"}})
+    events = _parse_sse(r.text)
+    tel = [e for e in events if e["type"] == "telemetry"]
+    assert tel, "應發出逐節點 telemetry"
+    assert all("node" in t and "latency_ms" in t for t in tel)
+    nodes = {t["node"] for t in tel}
+    assert "parse" in nodes and "match" in nodes
+
+
 def test_jobs_auto_falls_back_when_all_blocked(monkeypatch):
     from app.models import Profile, JobMatch, SearchResult
     monkeypatch.setattr(server_mod, "structure_profile",

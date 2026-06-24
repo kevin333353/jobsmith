@@ -64,3 +64,9 @@ export type UserProfile = Record<string, unknown>
 
 // 從職缺列表「產生投遞包」時，帶 JD + 使用者真實履歷進 pipeline（profile 缺省則後端用 demo）
 export interface Seed { jd: string; profile?: UserProfile | null; nonce: number }
+
+// 逐節點 agent telemetry（後端 telemetry SSE 事件）
+export interface TelemetryEntry {
+  node: string; latency_ms: number; calls: number;
+  input_tokens: number; output_tokens: number; cost_usd: number;
+}

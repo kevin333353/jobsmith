@@ -132,7 +132,25 @@ def _run_claude(prompt: str, model: str) -> str:
     envelope = json.loads(proc.stdout)
     if envelope.get("is_error"):
         raise RuntimeError(f"claude CLI 回報錯誤：{envelope.get('result')}")
+    _record_usage(envelope)
     return envelope.get("result", "")
+
+
+def _record_usage(envelope: dict) -> None:
+    """把 claude -p envelope 的 usage / total_cost_usd 回報給 telemetry（先前直接丟棄）。"""
+    try:
+        from app import telemetry
+        usage = envelope.get("usage") or {}
+        in_tok = (int(usage.get("input_tokens", 0) or 0)
+                  + int(usage.get("cache_read_input_tokens", 0) or 0)
+                  + int(usage.get("cache_creation_input_tokens", 0) or 0))
+        telemetry.record_llm(
+            input_tokens=in_tok,
+            output_tokens=int(usage.get("output_tokens", 0) or 0),
+            cost_usd=float(envelope.get("total_cost_usd", 0.0) or 0.0),
+        )
+    except Exception:  # telemetry 失敗不可影響主流程
+        pass
 
 
 class _CLIStructured:

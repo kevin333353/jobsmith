@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from langgraph.types import Command
 
+from app import telemetry
 from app.cli import load_profile
 from app.graph import build_graph
 from app.models import Profile
@@ -50,6 +51,7 @@ def _sse(obj: dict) -> str:
 
 def _stream(graph_input, config):
     """跑 graph.stream(updates)，逐節點 yield SSE；結束時判斷是否停在 interrupt。"""
+    telemetry.start_run()  # 在跑 graph 的這條執行緒重置 LLM 用量蒐集器
     for chunk in GRAPH.stream(graph_input, config, stream_mode="updates"):
         for node, update in chunk.items():
             if node == "__interrupt__":
@@ -59,6 +61,9 @@ def _stream(graph_input, config):
             for err in update.get("errors") or []:
                 yield _sse({"type": "node_error", "node": err.get("node", node),
                             "message": err.get("message", "")})
+            # telemetry：逐節點 token/成本/延遲（供前端顯示 agent 工程的可觀測性）。
+            for t in update.get("telemetry") or []:
+                yield _sse({"type": "telemetry", **t})
             yield _sse({"type": "node", "node": node, "data": serialize_update(update)})
     snapshot = GRAPH.get_state(config)
     if snapshot.next:  # 還有待跑節點 → 停在 human_gate interrupt
@@ -240,7 +245,8 @@ def run(body: RunBody):
             "jd_text": body.jd_text, "profile": profile,
             "parsed_job": None, "match_report": None, "company_brief": None,
             "tailored_resume": None, "cover_letter": None, "interview_kit": None,
-            "critique": None, "revision_count": 0, "approved": None, "errors": [],
+            "critique": None, "revision_count": 0, "approved": None,
+            "errors": [], "telemetry": [],
         }
         yield from _stream(initial, config)
 

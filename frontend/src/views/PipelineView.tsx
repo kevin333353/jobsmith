@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import type { PipelineState, Seed, UserProfile } from "../types"
+import type { PipelineState, Seed, UserProfile, TelemetryEntry } from "../types"
 import { readSSE } from "../sse"
 import { AgentTrace } from "../components/pipeline/AgentTrace"
 import {
@@ -21,6 +21,7 @@ export function PipelineView(
   const [revisions, setRevisions] = useState(0)
   const [nodeErrors, setNodeErrors] = useState<{ node: string; message: string }[]>([])
   const [profileWarning, setProfileWarning] = useState("")
+  const [telemetry, setTelemetry] = useState<TelemetryEntry[]>([])
   const [error, setError] = useState("")
 
   function handle(ev: any) {
@@ -34,6 +35,8 @@ export function PipelineView(
       setNodeErrors((e) => [...e, { node: ev.node, message: ev.message }])
     } else if (ev.type === "profile_warning") {
       setProfileWarning(ev.message)
+    } else if (ev.type === "telemetry") {
+      setTelemetry((t) => [...t, ev as TelemetryEntry])
     } else if (ev.type === "interrupt") {
       setThreadId(ev.thread_id); setPhase("approval"); setStatus("待人工核可")
     } else if (ev.type === "done") {
@@ -47,7 +50,7 @@ export function PipelineView(
     if (!jdText.trim()) return
     // 手動開跑（無 seed）時改用共用的真實履歷；都沒有才讓後端用範例 demo 並提醒。
     const effectiveProfile = profile ?? fallbackProfile ?? null
-    setError(""); setNodeErrors([]); setProfileWarning(""); setDone([]); setState({}); setRevisions(0)
+    setError(""); setNodeErrors([]); setProfileWarning(""); setTelemetry([]); setDone([]); setState({}); setRevisions(0)
     setPhase("running"); setStatus("啟動中…")
     try {
       const resp = await fetch("/api/run", {
@@ -123,6 +126,26 @@ export function PipelineView(
           <AgentTrace done={done} running={phase === "running"} revisions={revisions} status={status} />
         </aside>
         <main className="space-y-4">
+          {telemetry.length > 0 && (() => {
+            const tot = telemetry.reduce(
+              (a, t) => ({
+                calls: a.calls + (t.calls || 0),
+                tokens: a.tokens + (t.input_tokens || 0) + (t.output_tokens || 0),
+                cost: a.cost + (t.cost_usd || 0),
+                ms: a.ms + (t.latency_ms || 0),
+              }),
+              { calls: 0, tokens: 0, cost: 0, ms: 0 },
+            )
+            return (
+              <div className="text-xs text-slate-500 bg-white border rounded-lg px-3 py-2 flex flex-wrap gap-x-4 gap-y-1">
+                <span>⚙️ {telemetry.length} 個 agent</span>
+                <span>{tot.calls} 次 LLM 呼叫</span>
+                <span>{tot.tokens.toLocaleString()} tokens</span>
+                {tot.cost > 0 && <span>${tot.cost.toFixed(4)}</span>}
+                <span>{(tot.ms / 1000).toFixed(1)}s</span>
+              </div>
+            )
+          })()}
           {profileWarning && (
             <div className="border-2 border-amber-300 bg-amber-50 rounded-xl p-3 text-sm text-amber-800">
               ⚠️ {profileWarning}
