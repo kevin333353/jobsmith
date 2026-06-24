@@ -22,6 +22,7 @@ from app.sources.registry import search_all, linkedin_search_url
 
 from app.store import db as _appdb
 from app.store import history as _history
+from app.store import memory as _memory
 
 app = FastAPI(title="台灣 AI 求職 Co-pilot")
 
@@ -101,6 +102,8 @@ class RunBody(BaseModel):
     # 缺省時才退回 demo profile（CLI / 測試後備）。
     profile: dict | None = None
     profile_path: str = "data/demo_profile.json"
+    # 個人化偏好（語氣/目標職稱/年資/想強調技能）；套進 profile 讓各生成 agent 採用。
+    preferences: dict | None = None
 
 
 class ResumeBody(BaseModel):
@@ -129,6 +132,10 @@ def resume_evaluate(
         try:
             yield _sse({"type": "progress", "step": "structure", "message": "解析履歷中…"})
             profile = structure_profile(text)
+            try:
+                _memory.save_profile(profile.model_dump())  # 記住最近履歷（跨 session）
+            except Exception:
+                pass
             # 含 raw_text 原文，供使用者接著到「投遞包工作台」手動開跑時帶入本人背景。
             yield _sse({"type": "profile", "data": profile.model_dump()})
             yield _sse({"type": "progress", "step": "evaluate", "message": "健檢評估中…"})
@@ -162,6 +169,10 @@ def jobs_auto(
         try:
             yield _sse({"type": "progress", "step": "structure", "message": "解析履歷中…"})
             profile = structure_profile(text)
+            try:
+                _memory.save_profile(profile.model_dump())  # 記住最近履歷（跨 session）
+            except Exception:
+                pass
             # 把使用者真實履歷（含 raw_text 原文）送給前端，供「產生投遞包」時整包帶入 pipeline，
             # 讓 match/resume/cover/interview agent 拿到逐字履歷（檔案上傳時前端沒有原文，必須由後端帶）。
             yield _sse({"type": "profile", "data": profile.model_dump()})
@@ -367,6 +378,27 @@ def _resolve_profile(body: RunBody) -> Profile:
     return load_profile(profile_path)
 
 
+def _apply_preferences(profile: Profile, prefs: dict | None) -> Profile:
+    """把個人化偏好套進 profile（summary 加註 + preferred_roles），讓各生成 agent 採用，
+    不需更動 agent 簽名。prefs 缺省則原樣回傳。"""
+    if not prefs:
+        return profile
+    titles = [t for t in (prefs.get("target_titles") or []) if str(t).strip()]
+    if titles:
+        profile.preferred_roles = list(dict.fromkeys([*profile.preferred_roles, *titles]))
+    notes = []
+    if prefs.get("tone"):
+        notes.append(f"語氣偏好：{prefs['tone']}")
+    if prefs.get("seniority"):
+        notes.append(f"目標層級/年資：{prefs['seniority']}")
+    emph = [s for s in (prefs.get("emphasize_skills") or []) if str(s).strip()]
+    if emph:
+        notes.append("想強調的技能：" + "、".join(emph))
+    if notes:
+        profile.summary = (profile.summary + "\n（個人化偏好——" + "；".join(notes) + "）").strip()
+    return profile
+
+
 @app.post("/api/run")
 def run(body: RunBody):
     thread_id = uuid.uuid4().hex
@@ -377,6 +409,7 @@ def run(body: RunBody):
         # 在 generator 內解析履歷，壞/缺履歷回友善 SSE error 而非 500（與其他端點一致）。
         try:
             profile = _resolve_profile(body)
+            profile = _apply_preferences(profile, body.preferences)
         except Exception as exc:
             yield _sse({"type": "error",
                         "message": f"履歷資料無法使用，請重新上傳履歷再試。（{type(exc).__name__}）"})
@@ -407,6 +440,21 @@ def resume(body: ResumeBody):
         yield from _stream(Command(resume=body.decision), config)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.get("/api/memory")
+def memory_get():
+    return _memory.get_memory()
+
+
+class PreferencesBody(BaseModel):
+    preferences: dict
+
+
+@app.post("/api/memory")
+def memory_post(body: PreferencesBody):
+    _memory.save_preferences(body.preferences)
+    return {"ok": True}
 
 
 @app.get("/api/history")

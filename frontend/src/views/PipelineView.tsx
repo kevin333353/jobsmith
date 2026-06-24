@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import type { PipelineState, Seed, UserProfile, TelemetryEntry, EditablePackage } from "../types"
+import type { PipelineState, Seed, UserProfile, TelemetryEntry, EditablePackage, Preferences } from "../types"
 import { readSSE } from "../sse"
 import { AgentTrace } from "../components/pipeline/AgentTrace"
 import {
@@ -16,8 +16,8 @@ import {
 type Phase = "idle" | "running" | "approval" | "done"
 
 export function PipelineView(
-  { seed, fallbackProfile, onBack }:
-  { seed?: Seed | null; fallbackProfile?: UserProfile | null; onBack?: () => void },
+  { seed, fallbackProfile, preferences, onBack }:
+  { seed?: Seed | null; fallbackProfile?: UserProfile | null; preferences?: Preferences; onBack?: () => void },
 ) {
   const [jd, setJd] = useState("")
   const [url, setUrl] = useState("")
@@ -69,7 +69,7 @@ export function PipelineView(
     try {
       const resp = await fetch("/api/run", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jd_text: jdText, profile: effectiveProfile }),
+        body: JSON.stringify({ jd_text: jdText, profile: effectiveProfile, preferences: preferences ?? null }),
       })
       await readSSE(resp, handle)
       setPhase((p) => (p === "approval" ? p : "done"))

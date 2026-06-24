@@ -71,6 +71,11 @@ export interface TelemetryEntry {
   input_tokens: number; output_tokens: number; cost_usd: number;
 }
 
+// 個人化偏好（對應後端 user_memory.preferences）
+export interface Preferences {
+  target_titles?: string[]; seniority?: string; tone?: string; emphasize_skills?: string[];
+}
+
 // 技能缺口市場分析（對應後端 app/agents/skill_gap.py）
 export interface SkillCount { skill: string; count: number }
 export interface SkillGapReport { top_demand: SkillCount[]; your_gaps: SkillCount[]; have: string[] }
