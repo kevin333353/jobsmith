@@ -1,5 +1,9 @@
+import os
 import json
 from pathlib import Path
+
+# 測試用 in-memory checkpointer（須在 import app.server 建 GRAPH 前設定），避免汙染真實 db。
+os.environ.setdefault("COPILOT_DB", ":memory:")
 
 import pytest
 

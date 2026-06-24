@@ -8,3 +8,5 @@ __pycache__/
 *.egg-info/
 .superpowers/
 .DS_Store
+frontend/dist/
+data/checkpoints.sqlite*

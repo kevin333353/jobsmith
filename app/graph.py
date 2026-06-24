@@ -5,10 +5,13 @@
 生成節點讀 state 的 critique.feedback 改進；重寫覆寫各自 state key（last-write-wins，不需 reducer）。
 human_gate 用 interrupt()，故圖以 MemorySaver checkpointer compile，執行需帶 thread_id。
 """
+import os
+import sqlite3
 import time
+from pathlib import Path
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import interrupt
 
 from app import telemetry
@@ -147,7 +150,25 @@ def route_after_critic(state: CopilotState) -> str:
     return "revise"
 
 
-def build_graph():
+def _default_db_path() -> str:
+    """checkpoint db 路徑；COPILOT_DB 可覆寫（測試設 :memory: 以隔離）。"""
+    return os.environ.get(
+        "COPILOT_DB", str(Path(__file__).parent.parent / "data" / "checkpoints.sqlite"))
+
+
+def _sqlite_checkpointer() -> SqliteSaver:
+    """檔案型 checkpointer：跨程序重啟仍能 resume 同一 thread_id（人工核可關卡）。
+
+    check_same_thread=False 供 FastAPI threadpool 多執行緒共用單一連線（單人本機足夠）。
+    """
+    conn = sqlite3.connect(_default_db_path(), check_same_thread=False)
+    saver = SqliteSaver(conn)
+    saver.setup()
+    return saver
+
+
+def build_graph(checkpointer=None):
+    """編譯反思迴圈圖。checkpointer 預設用 SqliteSaver（持久化）；測試可注入 MemorySaver。"""
     g = StateGraph(CopilotState)
     g.add_node("parse", parse_node)
     g.add_node("match", match_node)
@@ -177,4 +198,4 @@ def build_graph():
         {"revise": "company_research", "approve": "human_gate"},
     )
     g.add_edge("human_gate", END)
-    return g.compile(checkpointer=MemorySaver())
+    return g.compile(checkpointer=checkpointer or _sqlite_checkpointer())
