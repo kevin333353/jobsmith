@@ -119,8 +119,9 @@ export function HistoryView(
               {p.approved ? <Badge tone="emerald" className="ml-2">已核可</Badge> : null}
             </p>
           </div>
-          <button onClick={(e) => del(p.id, e)} title="刪除"
-            className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition">
+          <button onClick={(e) => del(p.id, e)} aria-label={`刪除 ${p.job_title}`} title="刪除"
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") e.stopPropagation() }}
+            className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-300">
             <Trash2 className="w-4 h-4" />
           </button>
         </Card>

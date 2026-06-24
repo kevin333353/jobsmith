@@ -1,6 +1,6 @@
 import { useState } from "react"
-import type { ChangeEvent } from "react"
-import type { JobMatch, JobPosting, UserProfile, SkillGapReport } from "../types"
+import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react"
+import type { JobMatch, UserProfile, SkillGapReport } from "../types"
 import { readSSE } from "../sse"
 import { SAMPLE_RESUME } from "../sampleResume"
 import { Card } from "../ui/Card"
@@ -8,7 +8,7 @@ import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
 import { Skeleton } from "../ui/Skeleton"
 import { EmptyState } from "../ui/EmptyState"
-import { Search, Upload, Loader2, ExternalLink, Sparkles, AlertTriangle, CheckCircle2, XCircle, ChevronLeft, ChevronRight, Target, Building2, Compass } from "../ui/icons"
+import { Search, Upload, Loader2, ExternalLink, Sparkles, AlertTriangle, CheckCircle2, XCircle, ChevronLeft, ChevronRight, Target, Building2, X } from "../ui/icons"
 
 const PAGE_SIZE = 8
 
@@ -49,15 +49,34 @@ export function JobSearchView(
   const [error, setError] = useState("")
   const [page, setPage] = useState(1)
   const [skillGap, setSkillGap] = useState<SkillGapReport | null>(null)
-  const [mode, setMode] = useState<"resume" | "company">("resume")
-  const [companyName, setCompanyName] = useState("")
-  const [companyJobs, setCompanyJobs] = useState<JobPosting[]>([])
-  const [cBusy, setCBusy] = useState(false)
-  const [cStatus, setCStatus] = useState("")
-  const [cErr, setCErr] = useState("")
-  const [cDone, setCDone] = useState(false)
+  // 公司名單（選填）：除了 AI 自動找，使用者可加入想盯的公司，一起併入推薦結果。
+  const [companies, setCompanies] = useState<string[]>([])
+  const [companyInput, setCompanyInput] = useState("")
+
+  function addCompany(name: string) {
+    const n = name.trim()
+    if (!n) return
+    setCompanies((c) => (c.includes(n) ? c : [...c, n]))
+    setCompanyInput("")
+  }
+  function removeCompany(name: string) {
+    setCompanies((c) => c.filter((x) => x !== name))
+  }
+  function onCompanyKey(e: ReactKeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" || e.key === "," || e.key === "，" || e.key === "、") {
+      e.preventDefault(); addCompany(companyInput)
+    } else if (e.key === "Backspace" && !companyInput && companies.length) {
+      setCompanies((c) => c.slice(0, -1))
+    }
+  }
 
   async function go(form: FormData) {
+    // 把尚未變成標籤的輸入也一併送出（並回填成標籤，讓 UI 一致）。
+    const trailing = companyInput.trim()
+    const cs = trailing ? (companies.includes(trailing) ? companies : [...companies, trailing]) : companies
+    if (trailing) { setCompanies(cs); setCompanyInput("") }
+    if (cs.length) form.append("companies", cs.join(","))
+
     setBusy(true); setDone(false); setError(""); setJobs([]); setQueries([]); setSources([])
     setLinkedin(""); setProfile(null); setBlockedNote(""); setFallback(false); setPage(1); setSkillGap(null)
     setStatus("上傳中…")
@@ -68,7 +87,7 @@ export function JobSearchView(
         else if (ev.type === "profile") { setProfile(ev.data as UserProfile); onProfile?.(ev.data as UserProfile) }
         else if (ev.type === "queries") setQueries(ev.queries)
         else if (ev.type === "source")
-          // 後端會搜尋前 2 個關鍵字，同一來源會回報多次 → 依來源彙整（筆數加總；全部被擋才算略過）
+          // 後端會搜尋前 2 個關鍵字、再加每間指定公司，同一來源會回報多次 → 依來源彙整。
           setSources((s) => {
             const idx = s.findIndex((x) => x.source === ev.source)
             if (idx < 0) return [...s, { source: ev.source, count: ev.count, blocked: ev.blocked }]
@@ -117,122 +136,12 @@ export function JobSearchView(
     onPick(jd, profile)
   }
 
-  function pickPosting(j: JobPosting) {
-    const jd = [
-      j.title, `公司：${j.company}`,
-      j.location ? `地點：${j.location}` : "",
-      j.salary ? `薪資：${j.salary}` : "",
-      "", j.snippet || "",
-      j.requirements.length ? `\n需求：${j.requirements.join("、")}` : "",
-    ].filter(Boolean).join("\n")
-    onPick(jd, profile)
-  }
-
-  async function fetchCompanyJobs() {
-    if (!companyName.trim()) { setCErr("請輸入公司名稱"); return }
-    setCBusy(true); setCErr(""); setCompanyJobs([]); setCDone(false); setCStatus("查詢中…")
-    try {
-      const resp = await fetch("/api/company/jobs", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company: companyName }),
-      })
-      await readSSE(resp, (ev) => {
-        if (ev.type === "progress") setCStatus(ev.message)
-        else if (ev.type === "jobs") setCompanyJobs(ev.data as JobPosting[])
-        else if (ev.type === "error") setCErr(ev.message)
-        else if (ev.type === "done") setCDone(true)
-      })
-    } catch {
-      setCErr("連線發生問題，請確認伺服器是否啟動。")
-    } finally {
-      setCBusy(false); setCStatus("")
-    }
-  }
-
-  const modeToggle = (
-    <div className="inline-flex gap-1 p-1 bg-white border border-slate-200 rounded-xl shadow-card mb-5">
-      {([["resume", "依履歷找", Compass], ["company", "依公司找", Building2]] as const).map(([id, label, Icon]) => (
-        <button key={id} onClick={() => setMode(id)}
-          className={`inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg transition ${
-            mode === id ? "bg-brand-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
-          }`}>
-          <Icon className="w-4 h-4" />{label}
-        </button>
-      ))}
-    </div>
-  )
-
-  if (mode === "company") {
-    return (
-      <div>
-        {modeToggle}
-        <Card className="p-5 mb-5">
-          <p className="text-sm text-slate-600 mb-2">輸入公司名稱，查它在 104 / LinkedIn / Cake 與<strong>官網 careers</strong> 目前的開缺。</p>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Building2 className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input value={companyName} onChange={(e) => setCompanyName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") fetchCompanyJobs() }}
-                placeholder="例：未來智能、Appier、台積電…"
-                className="w-full border border-slate-300 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200" />
-            </div>
-            <Button onClick={fetchCompanyJobs} loading={cBusy} icon={Search}>查公司職缺</Button>
-          </div>
-          {cBusy && cStatus && (
-            <span className="text-sm text-slate-500 inline-flex items-center gap-1 mt-2">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />{cStatus}
-            </span>
-          )}
-          {cErr && <p className="text-sm text-rose-600 mt-2">{cErr}</p>}
-        </Card>
-
-        {cBusy && companyJobs.length === 0 && (
-          <div className="space-y-3">
-            {[0, 1, 2].map((i) => (
-              <Card key={i} className="p-4"><Skeleton className="h-4 w-1/2 mb-2" /><Skeleton className="h-3 w-1/3" /></Card>
-            ))}
-          </div>
-        )}
-        {cDone && companyJobs.length === 0 && !cErr && (
-          <Card className="p-2">
-            <EmptyState icon={Building2} title="查無該公司目前的公開職缺"
-              desc="可能沒有在這些平台 PO，或官網查不到；可直接到公司官網 careers 頁看看。" />
-          </Card>
-        )}
-        <div className="space-y-3">
-          {companyJobs.map((j, i) => (
-            <Card key={i} interactive className="p-4 flex flex-col sm:flex-row gap-4 animate-fade-in-up">
-              <div className="flex-1 min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <a href={j.url} target="_blank" rel="noreferrer"
-                    className="font-medium text-slate-900 hover:text-brand-700 hover:underline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">{j.title}</a>
-                  <Badge tone={j.source === "careers" ? "brand" : "slate"}>{SRC_LABEL[j.source] || j.source}</Badge>
-                </div>
-                <p className="text-sm text-slate-600 mt-0.5">
-                  {j.company}{j.location ? `｜${j.location}` : ""}{j.salary ? `｜${j.salary}` : ""}
-                </p>
-                {j.snippet && <p className="text-sm text-slate-700 mt-1 line-clamp-2">{j.snippet}</p>}
-              </div>
-              <div className="shrink-0 flex flex-row sm:flex-col gap-2">
-                <Button size="sm" icon={Sparkles} onClick={() => pickPosting(j)} className="whitespace-nowrap">產生投遞包</Button>
-                <a href={j.url} target="_blank" rel="noreferrer"
-                  className="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-sm hover:bg-slate-200 transition whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
-                  <ExternalLink className="w-3.5 h-3.5" />看原職缺
-                </a>
-              </div>
-            </Card>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div>
-      {modeToggle}
       <Card className="p-5 mb-5">
         <p className="text-sm text-slate-600 mb-2">
-          丟上你的履歷，AI 自動推導關鍵字、搜尋 104 / Yourator / Cake，並依你的履歷排序適合的職缺。
+          丟上你的履歷，AI 自動推導關鍵字、搜尋 104 / Yourator / Cake 並依履歷排序；
+          也可加入想去的公司，一起看看有沒有相關開缺。
         </p>
         <textarea
           className="w-full border border-slate-300 rounded-lg p-3 text-sm h-32 focus:outline-none focus:ring-2 focus:ring-brand-200"
@@ -240,7 +149,36 @@ export function JobSearchView(
           value={text}
           onChange={(e) => setText(e.target.value)}
         />
-        <div className="flex flex-wrap gap-2 mt-3 items-center">
+
+        <div className="mt-4">
+          <label className="text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
+            <Building2 className="w-4 h-4 text-slate-400" />也想盯哪些公司？（選填）
+          </label>
+          <div className="flex flex-wrap items-center gap-1.5 border border-slate-300 rounded-lg px-2 py-1.5 focus-within:ring-2 focus-within:ring-brand-200">
+            {companies.map((c) => (
+              <span key={c} className="inline-flex items-center gap-1 bg-brand-50 text-brand-700 rounded-md pl-2 pr-1 py-0.5 text-sm">
+                {c}
+                <button type="button" onClick={() => removeCompany(c)} aria-label={`移除 ${c}`}
+                  className="rounded hover:bg-brand-100 p-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+            <input
+              value={companyInput}
+              onChange={(e) => setCompanyInput(e.target.value)}
+              onKeyDown={onCompanyKey}
+              onBlur={() => addCompany(companyInput)}
+              disabled={busy}
+              aria-label="新增公司名稱"
+              placeholder={companies.length ? "再加一間…" : "例：Google、華碩、台積電（打字後按 Enter 加入）"}
+              className="flex-1 min-w-[10rem] bg-transparent text-sm py-0.5 focus:outline-none disabled:opacity-50"
+            />
+          </div>
+          <p className="text-xs text-slate-400 mt-1">會把這些公司在 104 / LinkedIn / Cake 與官網 careers 的開缺一併納入推薦。</p>
+        </div>
+
+        <div className="flex flex-wrap gap-2 mt-4 items-center">
           <Button onClick={onSubmitText} loading={busy} icon={Search}>開始自動找職缺</Button>
           <Button variant="secondary" onClick={() => setText(SAMPLE_RESUME)} disabled={busy}>載入範例履歷</Button>
           <label className={`inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition cursor-pointer focus-within:ring-2 focus-within:ring-brand-300 ${busy ? "opacity-50 pointer-events-none" : ""}`}>
@@ -370,7 +308,7 @@ export function JobSearchView(
               <div className="flex flex-wrap items-center gap-2">
                 <a href={m.job.url} target="_blank" rel="noreferrer"
                   className="font-medium text-slate-900 hover:text-brand-700 hover:underline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">{m.job.title}</a>
-                <Badge tone="slate">{SRC_LABEL[m.job.source] || m.job.source}</Badge>
+                <Badge tone={m.job.source === "careers" ? "brand" : "slate"}>{SRC_LABEL[m.job.source] || m.job.source}</Badge>
               </div>
               <p className="text-sm text-slate-600 mt-0.5">
                 {m.job.company}
@@ -398,18 +336,18 @@ export function JobSearchView(
       {jobs.length > PAGE_SIZE && (() => {
         const totalPages = Math.ceil(jobs.length / PAGE_SIZE)
         return (
-          <div className="flex items-center justify-center gap-1.5 mt-5">
+          <nav aria-label="職缺分頁" className="flex items-center justify-center gap-1.5 mt-5">
             <Button variant="secondary" size="sm" icon={ChevronLeft}
               disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一頁</Button>
             {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
-              <button key={n} onClick={() => setPage(n)}
-                className={`w-8 h-8 rounded-lg text-sm transition ${
+              <button key={n} onClick={() => setPage(n)} aria-current={n === page ? "page" : undefined}
+                className={`w-8 h-8 rounded-lg text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${
                   n === page ? "bg-brand-600 text-white" : "text-slate-600 hover:bg-slate-100"
                 }`}>{n}</button>
             ))}
             <Button variant="secondary" size="sm" onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages}>下一頁<ChevronRight className="w-4 h-4" /></Button>
-          </div>
+          </nav>
         )
       })()}
     </div>

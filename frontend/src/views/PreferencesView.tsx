@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { Preferences } from "../types"
 import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
@@ -19,6 +19,15 @@ export function PreferencesView(
   const [skills, setSkills] = useState((value.emphasize_skills || []).join("、"))
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
+
+  // 記憶是非同步載入的：value 由 {} 變成已存偏好時，把欄位同步回填，
+  // 否則開「個人化」分頁會看到空白表單（甚至誤存空值蓋掉既有偏好）。
+  useEffect(() => {
+    setTitles((value.target_titles || []).join("、"))
+    setSeniority(value.seniority || "")
+    setTone(value.tone || "")
+    setSkills((value.emphasize_skills || []).join("、"))
+  }, [value])
 
   async function save() {
     setBusy(true); setSaved(false)
@@ -55,10 +64,10 @@ export function PreferencesView(
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">語氣</label>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2" role="group" aria-label="語氣">
             {TONES.map((t) => (
-              <button key={t} type="button" onClick={() => setTone(t)}
-                className={`px-3 py-1.5 rounded-lg text-sm border transition ${
+              <button key={t} type="button" onClick={() => setTone(t)} aria-pressed={tone === t}
+                className={`px-3 py-1.5 rounded-lg text-sm border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${
                   tone === t ? "bg-brand-600 text-white border-brand-600" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
                 }`}>{t}</button>
             ))}

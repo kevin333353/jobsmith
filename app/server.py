@@ -18,6 +18,7 @@ from app.models import Profile
 from app.intake.resume_parser import extract_text
 from app.agents.resume_eval import structure_profile, evaluate_resume
 from app.agents.job_search import derive_queries, rank_jobs
+from app.agents.company_jobs import find_company_jobs
 from app.sources.registry import search_all, linkedin_search_url
 
 from app.store import db as _appdb
@@ -90,7 +91,8 @@ def _stream(graph_input, config):
         try:
             final = serialize_update(snapshot.values)
             if final.get("tailored_resume") or final.get("cover_letter") or final.get("interview_kit"):
-                _history.save_package(final)
+                # 帶 thread_id → 冪等存檔，重送 resume 不會重複存同一份投遞包。
+                _history.save_package(final, thread_id=config["configurable"]["thread_id"])
         except Exception:
             pass
         yield _sse({"type": "done"})
@@ -149,17 +151,30 @@ def resume_evaluate(
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+def _parse_companies(raw: str) -> list[str]:
+    """把使用者填的公司名單字串（逗號/頓號/換行分隔）切成乾淨清單，去重保序。"""
+    import re
+    out: list[str] = []
+    for part in re.split(r"[,，、\n]", raw or ""):
+        name = part.strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
 @app.post("/api/jobs/auto")
 def jobs_auto(
     file: UploadFile | None = File(default=None),
     resume_text: str = Form(default=""),
+    companies: str = Form(default=""),
 ):
-    """履歷 → 自動找職缺：解析履歷 → 推導關鍵字 → 搜尋多站 → 依履歷排序。"""
+    """履歷 → 自動找職缺：解析履歷 → 推導關鍵字 → 搜尋多站 →（選填）併入指定公司的開缺 → 依履歷排序。"""
     if file is not None:
         data = file.file.read()
         text = extract_text(data, file.filename or "resume.txt")
     else:
         text = resume_text
+    company_list = _parse_companies(companies)
 
     def gen():
         yield _sse({"type": "start"})
@@ -196,6 +211,31 @@ def jobs_auto(
                         seen.add(key)
                         all_jobs.append(j)
 
+            # 使用者指定的公司名單：併入這些公司的開缺（job boards 依公司過濾 + 官網 careers），
+            # 與 AI 自動找到的職缺一起排序，讓使用者除了 AI 推薦外也能盯著想去的公司。
+            company_jobs = []
+            for company in company_list:
+                yield _sse({"type": "progress", "step": "company",
+                            "message": f"查「{company}」的開缺中…"})
+                try:
+                    found = find_company_jobs(company, profile)
+                except Exception:
+                    found = []
+                added = 0
+                for j in found:
+                    key = j.url or (j.title + j.company)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    company_jobs.append(j)
+                    added += 1
+                if added:
+                    all_blocked = False
+                yield _sse({"type": "source", "source": company,
+                            "count": added, "blocked": added == 0})
+            # 指定公司的職缺排在前面，確保進入 LLM 排序名額（rank_jobs 只送前 N 筆評分）。
+            all_jobs = company_jobs + all_jobs
+
             # 誠實降級：所有來源失敗或零結果 → 告知並改用後備樣本職缺，demo 永遠有東西看。
             used_fallback = False
             if not all_jobs:
@@ -219,31 +259,6 @@ def jobs_auto(
         except Exception as exc:  # LLM/網路錯誤：友善降級
             yield _sse({"type": "error",
                         "message": f"AI 服務暫時無法使用，請稍後再試。（{type(exc).__name__}）"})
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
-
-
-class CompanyJobsBody(BaseModel):
-    company: str
-
-
-@app.post("/api/company/jobs")
-def company_jobs_endpoint(body: CompanyJobsBody):
-    """查某公司有無開缺：job boards 依公司過濾 + WebSearch 官網 careers。"""
-    def gen():
-        yield _sse({"type": "start"})
-        if not body.company.strip():
-            yield _sse({"type": "error", "message": "請輸入公司名稱"})
-            return
-        try:
-            from app.agents.company_jobs import find_company_jobs
-            yield _sse({"type": "progress", "message": f"查詢「{body.company}」的職缺中…"})
-            jobs = find_company_jobs(body.company)
-            yield _sse({"type": "jobs", "data": [j.model_dump() for j in jobs]})
-            yield _sse({"type": "done"})
-        except Exception as exc:  # noqa: BLE001
-            yield _sse({"type": "error",
-                        "message": f"查詢失敗，請稍後再試。（{type(exc).__name__}）"})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 

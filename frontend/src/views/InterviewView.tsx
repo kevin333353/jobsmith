@@ -34,7 +34,9 @@ export function InterviewView({ fallbackProfile }: { fallbackProfile?: UserProfi
       })
       const d = await r.json()
       if (!r.ok) { setError(d.error || "啟動失敗"); return }
-      setQuestions(d.questions || [])
+      const qs: InterviewQuestion[] = d.questions || []
+      if (!qs.length) { setError("AI 暫時無法出題，請稍後再試或換一份 JD。"); return }
+      setQuestions(qs)
       setPhase("running")
     } catch {
       setError("連線發生問題，請確認伺服器是否啟動。")

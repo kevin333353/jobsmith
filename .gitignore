@@ -11,3 +11,6 @@ __pycache__/
 frontend/dist/
 data/checkpoints.sqlite*
 data/app.sqlite*
+
+# 參考用截圖（非產品檔）
+opendesign.png

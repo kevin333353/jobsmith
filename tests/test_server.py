@@ -362,3 +362,55 @@ def test_jobs_auto_empty_returns_error():
     r = client.post("/api/jobs/auto", data={"resume_text": "  "})
     events = _parse_sse(r.text)
     assert any(e["type"] == "error" for e in events)
+
+
+def test_jobs_auto_merges_company_list_jobs(monkeypatch):
+    """指定公司名單時，公司開缺併入候選池一起排序（不再是獨立模式）。"""
+    from app.models import Profile, JobPosting, JobMatch, SearchResult
+    monkeypatch.setattr(server_mod, "structure_profile",
+                        lambda text: Profile(name="王", summary="後端", raw_text=text))
+    monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["AI 工程師"])
+    monkeypatch.setattr(server_mod, "search_all",
+                        lambda q, limit=15: [SearchResult(source="104", jobs=[
+                            JobPosting(source="104", title="AI 工程師", company="某公司", url="u1")])])
+    captured = {}
+
+    def fake_find(company, profile=None):
+        captured.setdefault("companies", []).append(company)
+        return [JobPosting(source="careers", title="ML Engineer", company=company,
+                           url=f"https://{company}.com/jobs/ml")]
+    monkeypatch.setattr(server_mod, "find_company_jobs", fake_find)
+    monkeypatch.setattr(server_mod, "rank_jobs",
+                        lambda profile, jobs, top_k=None: [JobMatch(job=j, fit_score=70) for j in jobs])
+
+    client = TestClient(server_mod.app)
+    r = client.post("/api/jobs/auto",
+                    data={"resume_text": "我的履歷 Python", "companies": "Google、華碩"})
+    events = _parse_sse(r.text)
+    assert captured["companies"] == ["Google", "華碩"]
+    jobs_ev = next(e for e in events if e["type"] == "jobs")
+    titles = {m["job"]["title"] for m in jobs_ev["data"]}
+    assert {"AI 工程師", "ML Engineer"} <= titles  # 履歷職缺 + 公司開缺都在
+
+
+def test_jobs_auto_without_companies_skips_company_lookup(monkeypatch):
+    from app.models import Profile, JobPosting, JobMatch, SearchResult
+    monkeypatch.setattr(server_mod, "structure_profile",
+                        lambda text: Profile(name="王", summary="後端", raw_text=text))
+    monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["AI 工程師"])
+    monkeypatch.setattr(server_mod, "search_all",
+                        lambda q, limit=15: [SearchResult(source="104", jobs=[
+                            JobPosting(source="104", title="AI 工程師", company="某公司", url="u1")])])
+    called = {"n": 0}
+
+    def fake_find(company, profile=None):
+        called["n"] += 1
+        return []
+    monkeypatch.setattr(server_mod, "find_company_jobs", fake_find)
+    monkeypatch.setattr(server_mod, "rank_jobs",
+                        lambda profile, jobs, top_k=None: [JobMatch(job=j, fit_score=70) for j in jobs])
+
+    client = TestClient(server_mod.app)
+    r = client.post("/api/jobs/auto", data={"resume_text": "我的履歷 Python"})
+    assert r.status_code == 200
+    assert called["n"] == 0  # 沒填公司名單就不查公司

@@ -9,7 +9,10 @@ from app.store import db
 
 def get_memory() -> dict:
     conn = db.get_conn()
-    r = conn.execute("SELECT profile_json, preferences_json FROM user_memory WHERE id=1").fetchone()
+    # 讀取也納入 LOCK（共用單一 Connection 非執行緒安全，見 history.list_packages 註解）。
+    with db.LOCK:
+        r = conn.execute(
+            "SELECT profile_json, preferences_json FROM user_memory WHERE id=1").fetchone()
     if not r:
         return {"profile": None, "preferences": {}}
     return {

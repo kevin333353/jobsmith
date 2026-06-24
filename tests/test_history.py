@@ -29,3 +29,19 @@ def test_delete():
 
 def test_get_missing_returns_none():
     assert history.get_package(999999) is None
+
+
+def test_save_is_idempotent_per_thread_id():
+    # 同一 thread_id 重存（resume 重送/雙擊）只應留一筆，回傳同一 id。
+    pid1 = history.save_package(_state(), thread_id="t-abc")
+    pid2 = history.save_package(_state(), thread_id="t-abc")
+    assert pid1 == pid2
+    same = [r for r in history.list_packages() if r["id"] == pid1]
+    assert len(same) == 1
+
+
+def test_save_without_thread_id_still_inserts_each_time():
+    # 沒帶 thread_id 時維持原行為（每次都插入新列）。
+    a = history.save_package(_state())
+    b = history.save_package(_state())
+    assert a != b

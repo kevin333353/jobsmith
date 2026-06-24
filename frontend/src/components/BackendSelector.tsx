@@ -51,8 +51,9 @@ export function BackendSelector() {
         <select
           value={current}
           disabled={busy}
+          aria-label="選擇 LLM 後端"
           onChange={(e) => change(e.target.value)}
-          className="appearance-none bg-transparent pr-5 font-medium text-slate-800 focus:outline-none disabled:opacity-50 cursor-pointer"
+          className="appearance-none bg-transparent pr-5 font-medium text-slate-800 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 disabled:opacity-50 cursor-pointer"
         >
           {visible.map((o) => (
             <option key={o.id} value={o.id} disabled={!o.available}>

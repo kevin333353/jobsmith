@@ -23,7 +23,12 @@ def _init(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS packages("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, job_title TEXT, company TEXT, "
-        "match_score INTEGER, jd_text TEXT, profile_json TEXT, package_json TEXT, approved INTEGER)")
+        "match_score INTEGER, jd_text TEXT, profile_json TEXT, package_json TEXT, approved INTEGER, "
+        "thread_id TEXT)")
+    # 既有資料庫（M11 前建立）缺 thread_id 欄位時補上——冪等存檔用。
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(packages)").fetchall()}
+    if "thread_id" not in cols:
+        conn.execute("ALTER TABLE packages ADD COLUMN thread_id TEXT")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS user_memory("
         "id INTEGER PRIMARY KEY CHECK (id=1), profile_json TEXT, preferences_json TEXT, updated_at TEXT)")
