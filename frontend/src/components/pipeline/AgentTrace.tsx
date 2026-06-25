@@ -9,18 +9,18 @@ import {
 type Kind = "agent" | "decision" | "gate"
 interface NodeDef { key: string; label: string; icon: ComponentType<{ className?: string }>; kind: Kind }
 
-const PARSE: NodeDef = { key: "parse", label: "① 解析 JD", icon: Search, kind: "agent" }
-const MATCH: NodeDef = { key: "match", label: "② 匹配評分", icon: Target, kind: "agent" }
+const PARSE: NodeDef = { key: "parse", label: "解析 JD", icon: Search, kind: "agent" }
+const MATCH: NodeDef = { key: "match", label: "匹配評分", icon: Target, kind: "agent" }
 const SUP_MATCH: NodeDef = { key: "supervisor_match", label: "Supervisor · 是否續做", icon: Sparkles, kind: "decision" }
-const COMPANY: NodeDef = { key: "company_research", label: "⑧ 公司情報", icon: Building2, kind: "agent" }
+const COMPANY: NodeDef = { key: "company_research", label: "公司情報", icon: Building2, kind: "agent" }
 const GEN: NodeDef[] = [
-  { key: "resume_tailor", label: "③ 客製履歷", icon: FileText, kind: "agent" },
-  { key: "cover_letter", label: "④ 求職信", icon: Mail, kind: "agent" },
-  { key: "interview_prep", label: "⑤ 面試準備", icon: MessageSquare, kind: "agent" },
+  { key: "resume_tailor", label: "客製履歷", icon: FileText, kind: "agent" },
+  { key: "cover_letter", label: "求職信", icon: Mail, kind: "agent" },
+  { key: "interview_prep", label: "面試準備", icon: MessageSquare, kind: "agent" },
 ]
-const CRITIC: NodeDef = { key: "critic", label: "⑥ 品管 / 反思", icon: ShieldCheck, kind: "agent" }
+const CRITIC: NodeDef = { key: "critic", label: "品管 / 反思", icon: ShieldCheck, kind: "agent" }
 const SUP_CRITIC: NodeDef = { key: "supervisor_critic", label: "Supervisor · 核可 / 重寫", icon: Sparkles, kind: "decision" }
-const GATE: NodeDef = { key: "human_gate", label: "⑦ 人工核可", icon: CheckCircle2, kind: "gate" }
+const GATE: NodeDef = { key: "human_gate", label: "人工核可", icon: CheckCircle2, kind: "gate" }
 
 const GEN_KEYS = GEN.map((n) => n.key)
 
@@ -60,11 +60,18 @@ function statusStyle(s: Status) {
   }
 }
 
+// 大數字壓縮顯示，避免 token 數撐破統計框（如 303,636 → 304K）。
+function compact(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1).replace(/\.0$/, "") + "M"
+  if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1).replace(/\.0$/, "") + "K"
+  return String(n)
+}
+
 function NodeBadges({ t }: { t?: TelemetryEntry }) {
   if (!t) return null
   const tokens = (t.input_tokens || 0) + (t.output_tokens || 0)
   const items: [ComponentType<{ className?: string }>, string][] = []
-  if (tokens > 0) items.push([Cpu, tokens.toLocaleString()])
+  if (tokens > 0) items.push([Cpu, compact(tokens)])
   if (t.latency_ms > 0) items.push([Timer, `${(t.latency_ms / 1000).toFixed(1)}s`])
   if (!items.length) return null
   return (
@@ -113,11 +120,11 @@ function Stat(
   { icon: ComponentType<{ className?: string }>; label: string; value: string },
 ) {
   return (
-    <div className="flex items-center gap-2 bg-white/5 rounded-lg px-2.5 py-1.5">
+    <div className="flex items-center gap-2 bg-white/5 rounded-lg px-2.5 py-1.5 min-w-0">
       <Icon className="w-3.5 h-3.5 text-brand-300 shrink-0" />
-      <div className="leading-tight">
-        <div className="text-sm font-semibold text-white">{value}</div>
-        <div className="text-[10px] text-slate-400">{label}</div>
+      <div className="leading-tight min-w-0">
+        <div className="text-sm font-semibold text-white truncate">{value}</div>
+        <div className="text-[10px] text-slate-400 truncate">{label}</div>
       </div>
     </div>
   )
@@ -185,7 +192,7 @@ export function AgentTrace(
       {hasTelem && (
         <div className="grid grid-cols-3 gap-2 mb-4">
           <Stat icon={Gauge} label="agents" value={String(byNode.size)} />
-          <Stat icon={Cpu} label="tokens" value={totals.tokens.toLocaleString()} />
+          <Stat icon={Cpu} label="tokens" value={compact(totals.tokens)} />
           <Stat icon={Timer} label="時間" value={`${(totals.ms / 1000).toFixed(1)}s`} />
         </div>
       )}

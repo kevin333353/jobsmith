@@ -22,6 +22,9 @@ class CopilotState(TypedDict):
     critique: CritiqueReport | None
     revision_count: int
     approved: bool | None
+    # 批次模式：清單逐一無人值守產生投遞包時為 True，human_gate 略過互動核可、
+    # 直接跑到底並以「待審」存檔，使用者事後到「我的投遞包」核可/刪除。
+    batch: bool
     # 優雅降級：任一節點 agent 失敗時附加 {node, message}，不中斷整條流程。
     # 用 operator.add 當 reducer，平行生成節點同時失敗也不會互蓋。
     errors: Annotated[list[dict], operator.add]

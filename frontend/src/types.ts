@@ -105,7 +105,7 @@ export type PipelineEvent =
   | ({ type: "telemetry" } & TelemetryEntry)
   | { type: "interrupt"; thread_id: string }
   | { type: "error"; message: string }
-  | { type: "done" }
+  | { type: "done"; package_id?: number }
 
 // 多輪面試模擬（對應後端 app/agents/interview_sim.py）
 export interface InterviewQuestion { category: string; question: string }

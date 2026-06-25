@@ -1,193 +1,198 @@
-import { useEffect, useState } from "react"
-import type { PipelineState, Seed, UserProfile, TelemetryEntry, EditablePackage, Preferences, PipelineEvent } from "../types"
-import { readSSE } from "../sse"
+import { useEffect, useRef, useState } from "react"
+import type { PipelineState, Seed, UserProfile, TelemetryEntry, Preferences } from "../types"
 import { AgentTrace } from "../components/pipeline/AgentTrace"
 import {
   MatchCard, CompanyCard, ResumeDoc, CoverLetterDoc, InterviewKitDoc, CritiqueCard,
 } from "../components/pipeline/Documents"
-import { RefineChat } from "../components/pipeline/RefineChat"
 import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
 import { EmptyState } from "../ui/EmptyState"
 import {
-  Sparkles, Network, ArrowLeft, AlertTriangle, CheckCircle2, RefreshCw, Printer, LinkIcon,
-  FileDown, FileText,
+  Sparkles, Network, ArrowLeft, AlertTriangle, FileText, ChevronLeft, ChevronRight,
+  Loader2, CheckCircle2,
 } from "../ui/icons"
 
-type Phase = "idle" | "running" | "approval" | "done"
+type Phase = "idle" | "running" | "done"
+// 記住目前/最近一次背景產生，重新整理或切回分頁時接回繼續看。
+const RUN_KEY = "copilot.currentRun.v1"
+
+interface RunEvent {
+  type: string
+  node?: string
+  data?: Partial<PipelineState>
+  message?: string
+  package_id?: number
+  [k: string]: unknown
+}
 
 export function PipelineView(
   { seed, fallbackProfile, preferences, onBack }:
   { seed?: Seed | null; fallbackProfile?: UserProfile | null; preferences?: Preferences; onBack?: () => void },
 ) {
   const [jd, setJd] = useState("")
-  const [url, setUrl] = useState("")
-  const [fetching, setFetching] = useState(false)
-  const [fetchErr, setFetchErr] = useState("")
+  const [manualJd, setManualJd] = useState("")
   const [phase, setPhase] = useState<Phase>("idle")
   const [status, setStatus] = useState("")
   const [done, setDone] = useState<string[]>([])
   const [state, setState] = useState<PipelineState>({})
-  const [threadId, setThreadId] = useState("")
   const [revisions, setRevisions] = useState(0)
+  const [telemetry, setTelemetry] = useState<TelemetryEntry[]>([])
   const [nodeErrors, setNodeErrors] = useState<{ node: string; message: string }[]>([])
   const [profileWarning, setProfileWarning] = useState("")
-  const [telemetry, setTelemetry] = useState<TelemetryEntry[]>([])
   const [error, setError] = useState("")
-  const [edited, setEdited] = useState<EditablePackage | null>(null)
-  const [showJd, setShowJd] = useState(false)  // seeded 模式下是否展開 JD 查看/編輯
+  const [page, setPage] = useState(0)
 
-  function handle(ev: PipelineEvent) {
-    if (ev.type === "start") {
-      setThreadId(ev.thread_id); setStatus("執行中…")
-    } else if (ev.type === "node") {
-      setDone((d) => [...d, ev.node])
+  // 輪詢狀態：目前 thread、已收事件數、計時器 id。
+  const poll = useRef<{ thread: string; since: number; timer: number | null }>(
+    { thread: "", since: 0, timer: null })
+
+  function resetView() {
+    setError(""); setNodeErrors([]); setProfileWarning(""); setTelemetry([])
+    setDone([]); setState({}); setRevisions(0); setPage(0)
+  }
+
+  function applyEvent(ev: RunEvent) {
+    if (ev.type === "node") {
+      setDone((d) => [...d, ev.node as string])
       if (ev.data) setState((s) => ({ ...s, ...ev.data }))
       if (ev.node === "critic" && ev.data?.revision_count) setRevisions(ev.data.revision_count)
     } else if (ev.type === "node_error") {
-      setNodeErrors((e) => [...e, { node: ev.node, message: ev.message }])
+      setNodeErrors((e) => [...e, { node: ev.node as string, message: ev.message || "" }])
     } else if (ev.type === "profile_warning") {
-      setProfileWarning(ev.message)
+      setProfileWarning(ev.message || "")
     } else if (ev.type === "telemetry") {
-      setTelemetry((t) => [...t, ev as TelemetryEntry])
-    } else if (ev.type === "interrupt") {
-      setThreadId(ev.thread_id); setPhase("approval"); setStatus("待人工核可")
+      setTelemetry((t) => [...t, ev as unknown as TelemetryEntry])
     } else if (ev.type === "done") {
-      setPhase((p) => (p === "approval" ? p : "done")); setStatus("完成 ✅")
+      setPhase("done"); setStatus("完成 ✅")
     } else if (ev.type === "error") {
       setError(ev.message || "發生錯誤"); setPhase("done"); setStatus("")
     }
   }
 
-  async function run(jdText: string = jd, profile?: UserProfile | null) {
-    if (!jdText.trim()) return
-    // 手動開跑（無 seed）時改用共用的真實履歷；都沒有才讓後端用範例 demo 並提醒。
-    const effectiveProfile = profile ?? fallbackProfile ?? null
-    setError(""); setNodeErrors([]); setProfileWarning(""); setTelemetry([]); setDone([]); setState({}); setRevisions(0)
-    setEdited(null)
-    setPhase("running"); setStatus("啟動中…")
+  function stopPoll() {
+    if (poll.current.timer) { window.clearTimeout(poll.current.timer); poll.current.timer = null }
+  }
+
+  // 輪詢某次背景產生的進度；done 或 found=false 即停。重新整理可從 since=0 重播全部。
+  function startPolling(threadId: string, packageId: number) {
+    stopPoll()
+    poll.current = { thread: threadId, since: 0, timer: null }
+    setPhase("running"); setStatus("產生中…")
+    const tick = async () => {
+      try {
+        const r = await fetch(`/api/run/events/${threadId}?since=${poll.current.since}`)
+        const d = await r.json()
+        if (!d.found) { await loadFromHistory(packageId); return }  // 已清理/伺服器重啟 → 改載歷史
+        const events: RunEvent[] = d.events || []
+        poll.current.since += events.length
+        events.forEach(applyEvent)
+        if (d.done) { stopPoll(); setPhase("done"); return }
+        poll.current.timer = window.setTimeout(tick, 900)
+      } catch {
+        poll.current.timer = window.setTimeout(tick, 1500)
+      }
+    }
+    tick()
+  }
+
+  async function loadFromHistory(packageId: number) {
+    stopPoll()
     try {
-      const resp = await fetch("/api/run", {
+      const d = await (await fetch(`/api/history/${packageId}`)).json()
+      if (d && d.package) {
+        const pkg = d.package as PipelineState
+        setState(pkg); if (d.jd_text) setJd(d.jd_text)
+        // 已完成的包是一次載入的，沒有逐節點事件 → 依成品反推已完成節點，讓左側編排顯示綠燈而非全部待跑。
+        const nd: string[] = []
+        if (pkg.parsed_job) nd.push("parse")
+        if (pkg.match_report) nd.push("match", "supervisor_match")
+        if (pkg.company_brief) nd.push("company_research")
+        if (pkg.tailored_resume) nd.push("resume_tailor")
+        if (pkg.cover_letter) nd.push("cover_letter")
+        if (pkg.interview_kit) nd.push("interview_prep")
+        if (pkg.tailored_resume || pkg.cover_letter || pkg.interview_kit) nd.push("join")
+        if (pkg.critique) nd.push("critic", "supervisor_critic", "human_gate")
+        setDone(nd)
+      }
+    } catch { /* 忽略 */ }
+    setPhase("done"); setStatus("")
+  }
+
+  // 產生投遞包（背景、射後不理）：POST /api/run → 記住 thread → 開始輪詢。
+  // 完成後自動存進「我的投遞包」(待審)；離開頁面/重新整理都不中斷。
+  async function run(jdText: string, profile?: UserProfile | null) {
+    if (!jdText.trim()) return
+    const effectiveProfile = profile ?? fallbackProfile ?? null
+    resetView(); setJd(jdText); setPhase("running"); setStatus("啟動中…")
+    try {
+      const r = await fetch("/api/run", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jd_text: jdText, profile: effectiveProfile, preferences: preferences ?? null }),
       })
-      await readSSE(resp, handle)
-      setPhase((p) => (p === "approval" ? p : "done"))
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}))
+        setError(d.error || "啟動失敗，請稍後再試。"); setPhase("idle"); return
+      }
+      const d = await r.json()
+      localStorage.setItem(RUN_KEY, JSON.stringify({ threadId: d.thread_id, packageId: d.package_id, jd: jdText }))
+      startPolling(d.thread_id, d.package_id)
     } catch {
       setError("連線發生問題，請確認伺服器是否啟動。"); setPhase("idle")
     }
   }
 
-  async function decide(decision: "y" | "n") {
-    // 退回重做會重新生成成品 → 丟棄上一輪的編輯，避免舊編輯值靜默覆蓋新成品。
-    if (decision === "n") setEdited(null)
-    setPhase("running"); setStatus(decision === "y" ? "核可中…" : "退回中…")
-    try {
-      const resp = await fetch("/api/resume", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ thread_id: threadId, decision }),
-      })
-      await readSSE(resp, handle)
-      setPhase("done")
-    } catch {
-      setError("連線發生問題。")
-    }
-  }
-
-  async function loadSample() {
-    const j = await (await fetch("/api/sample")).json()
-    setJd(j.jd_text)
-  }
-
-  // 貼職缺網址 → 後端抽取 JD 文字（104 走官方 API，其餘通用抽取）→ 填入文字框。
-  async function fetchUrl() {
-    if (!url.trim() || fetching) return
-    setFetching(true); setFetchErr("")
-    try {
-      const r = await fetch("/api/jd/fetch", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      })
-      const d = await r.json()
-      if (!r.ok) { setFetchErr(d.error || "抓取失敗，請改貼 JD 文字。"); return }
-      const head = [d.title, d.company ? `公司：${d.company}` : ""].filter(Boolean).join("\n")
-      setJd((head ? head + "\n\n" : "") + (d.text || ""))
-    } catch {
-      setFetchErr("連線發生問題，請改貼 JD 文字。")
-    } finally {
-      setFetching(false)
-    }
-  }
-
-  // 文件直接可編輯（不需切換按鈕）：首次輸入時從目前成品初始化可編輯欄位，
-  // 之後讀／印／匯出都用編輯後的值。
-  const patch = (p: Partial<EditablePackage>) =>
-    setEdited((e) => ({
-      resumeSummary: state.tailored_resume?.summary ?? "",
-      resumeBullets: (state.tailored_resume?.bullets ?? []).join("\n"),
-      coverSubject: state.cover_letter?.subject ?? "",
-      coverBody: state.cover_letter?.body ?? "",
-      ...(e ?? {}),
-      ...p,
-    }))
-
-  function buildPkg() {
-    const r = state.tailored_resume, c = state.cover_letter, k = state.interview_kit
-    return {
-      job_title: state.parsed_job?.title || "求職投遞包",
-      company: state.parsed_job?.company || state.company_brief?.company || "",
-      resume: r ? {
-        summary: edited ? edited.resumeSummary : r.summary,
-        bullets: edited ? edited.resumeBullets.split("\n").filter((b) => b.trim()) : r.bullets,
-        ats_keywords_hit: r.ats_keywords_hit,
-      } : undefined,
-      cover_letter: c ? {
-        subject: edited ? edited.coverSubject : (c.subject ?? ""),
-        body: edited ? edited.coverBody : c.body,
-      } : undefined,
-      interview: k ?? undefined,
-    }
-  }
-
-  async function downloadDocx() {
-    try {
-      const r = await fetch("/api/export/docx", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildPkg()),
-      })
-      if (!r.ok) { setError("匯出失敗，請重試。"); return }
-      const blob = await r.blob()
-      const a = document.createElement("a")
-      a.href = URL.createObjectURL(blob)
-      a.download = "投遞包.docx"
-      a.click()
-      URL.revokeObjectURL(a.href)
-    } catch {
-      setError("連線發生問題，請確認伺服器是否啟動。")
-    }
-  }
-
-  // 文件的螢幕版是 textarea（no-print）、列印版是唯讀排版（hidden print:block），故可直接列印。
-  function printDocs() { window.print() }
-
-  // 從「自動找職缺」點選某職缺帶 JD + 真實履歷進來 → 自動開跑（投遞包用本人背景）。
-  // 由父層的 seed.nonce 觸發（外部訊號），是 effect 的正當用途。
+  // 從「自動找職缺」帶 JD 進來 → 立刻在背景產生（seed.nonce 外部訊號觸發）。
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (seed?.jd) { setJd(seed.jd); run(seed.jd, seed.profile) }
+    if (seed?.jd) run(seed.jd, seed.profile)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed?.nonce])
 
-  // 與 AI 討論修改時帶入的履歷背景（種子帶入的投遞包履歷，或共用 fallback）。
-  const refineProfile = seed?.profile ?? fallbackProfile ?? null
+  // 掛載時（無 seed）接回最近一次背景產生：重新整理/切回分頁都能繼續看。
+  useEffect(() => {
+    if (seed?.jd) return
+    try {
+      const raw = localStorage.getItem(RUN_KEY)
+      if (!raw) return
+      const s = JSON.parse(raw)
+      if (s.threadId && s.packageId) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setJd(s.jd || "")
+        startPolling(s.threadId, s.packageId)
+      }
+    } catch { /* 忽略毀損快取 */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  const hasDocs = Boolean(
-    state.match_report || state.company_brief || state.tailored_resume ||
-    state.cover_letter || state.interview_kit || state.critique,
-  )
-  // 來自 AI 搜尋（有 seed）：JD 已載入，收起貼網址/JD 看板省空間，只留標題＋匯出，可展開編輯。
-  const seeded = Boolean(seed?.jd)
+  // 卸載時停止輪詢（分頁常駐通常不卸載，保險）。
+  useEffect(() => () => stopPoll(), [])
+
+  // 成品分頁：右側一次只顯示一份（唯讀），用分頁標籤或上一頁/下一頁切換。
+  const docFor = (key: string) => {
+    switch (key) {
+      case "match": return state.match_report ? <MatchCard m={state.match_report} /> : null
+      case "company": return state.company_brief ? <CompanyCard c={state.company_brief} /> : null
+      case "resume": return state.tailored_resume ? <ResumeDoc r={state.tailored_resume} /> : null
+      case "cover": return state.cover_letter ? <CoverLetterDoc c={state.cover_letter} /> : null
+      case "interview": return state.interview_kit ? <InterviewKitDoc k={state.interview_kit} /> : null
+      case "critique": return state.critique ? <CritiqueCard q={state.critique} /> : null
+      default: return null
+    }
+  }
+  const PAGE_DEFS = [
+    { key: "match", label: "匹配評分" }, { key: "company", label: "公司情報" },
+    { key: "resume", label: "客製履歷" }, { key: "cover", label: "求職信" },
+    { key: "interview", label: "面試準備" }, { key: "critique", label: "品管" },
+  ]
+  const exists: Record<string, boolean> = {
+    match: !!state.match_report, company: !!state.company_brief, resume: !!state.tailored_resume,
+    cover: !!state.cover_letter, interview: !!state.interview_kit, critique: !!state.critique,
+  }
+  const pages = PAGE_DEFS.filter((p) => exists[p.key])
+  const curPage = Math.min(page, Math.max(0, pages.length - 1))
+  const hasDocs = pages.length > 0
   const jdTitle = jd.split("\n").map((s) => s.trim()).find(Boolean) || "此職缺"
+  const idleEmpty = phase === "idle" && !hasDocs
 
   return (
     <div>
@@ -197,181 +202,93 @@ export function PipelineView(
           <ArrowLeft className="w-4 h-4" />回職缺列表
         </button>
       )}
-      <Card className="no-print mb-4 p-5">
-        {seeded ? (
-          // 來自 AI 搜尋：精簡標題列 + 匯出；JD 預設收起，可展開查看／編輯後重跑。
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
+
+      {idleEmpty ? (
+        // 空狀態：從「自動找職缺」按產生投遞包，或直接貼 JD 產生。
+        <Card className="p-5">
+          <p className="text-sm text-slate-600 mb-3">
+            到「自動找職缺」對某個職缺按「產生投遞包」，這裡會即時長出成品。
+            產生在背景進行，<strong>離開或重新整理都不會中斷</strong>，完成後自動存進「我的投遞包」（待審）。
+            也可直接貼 JD 產生：
+          </p>
+          <textarea
+            className="w-full border border-slate-300 rounded-lg p-3 text-sm h-32 focus:outline-none focus:ring-2 focus:ring-brand-200"
+            placeholder="貼上職缺 JD 文字…" value={manualJd} onChange={(e) => setManualJd(e.target.value)} />
+          <div className="mt-3">
+            <Button icon={Sparkles} disabled={!manualJd.trim()} onClick={() => run(manualJd)}>產生投遞包</Button>
+          </div>
+          {error && <p className="text-sm text-rose-600 mt-2">{error}</p>}
+        </Card>
+      ) : (
+        <div className="grid lg:grid-cols-[300px_1fr] gap-6">
+          <aside className="no-print">
+            <AgentTrace done={done} running={phase === "running"} revisions={revisions}
+              status={status} telemetry={telemetry} nodeErrors={nodeErrors} />
+          </aside>
+          <main className="space-y-4">
+            <div className="no-print flex items-center gap-2 flex-wrap">
               <FileText className="w-4 h-4 text-brand-600 shrink-0" />
-              <span className="font-medium text-slate-800 truncate max-w-full" title={jdTitle}>{jdTitle}</span>
-              <button type="button" onClick={() => setShowJd((v) => !v)}
-                className="text-xs text-slate-400 hover:text-brand-600 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
-                {showJd ? "收合" : "查看 / 編輯 JD"}
-              </button>
-              {hasDocs && (
-                <div className="ml-auto flex gap-2">
-                  <Button variant="secondary" icon={FileDown} onClick={downloadDocx}>下載 Word</Button>
-                  <Button variant="secondary" icon={Printer} onClick={printDocs}>列印 / 匯出 PDF</Button>
-                </div>
+              <span className="font-medium text-slate-800 truncate" title={jdTitle}>{jdTitle}</span>
+              {phase === "running" && (
+                <span className="text-sm text-brand-600 inline-flex items-center gap-1">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />產生中…
+                </span>
+              )}
+              {phase === "done" && !error && (
+                <span className="text-sm text-emerald-600 inline-flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" />已存入「我的投遞包」（待審）
+                </span>
               )}
             </div>
-            {showJd && (
-              <div className="mt-3">
-                <textarea
-                  className="w-full border border-slate-300 rounded-lg p-3 text-sm h-40 focus:outline-none focus:ring-2 focus:ring-brand-200"
-                  value={jd}
-                  onChange={(e) => setJd(e.target.value)}
-                />
-                <Button className="mt-2" onClick={() => run()} disabled={phase === "running" || !jd.trim()}
-                  loading={phase === "running"} icon={Sparkles}>重新以這份 JD 產生</Button>
+
+            {profileWarning && (
+              <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-sm text-amber-800 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />{profileWarning}
               </div>
             )}
-          </div>
-        ) : (
-          // 手動進入：完整看板（貼網址抓取 / 貼 JD / 開始 / 範例 / 匯出）。
-          <>
-            <div className="flex gap-2 mb-3">
-              <div className="relative flex-1">
-                <LinkIcon className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") fetchUrl() }}
-                  placeholder="貼職缺網址（104 或一般網頁）自動抓取 JD…"
-                  className="w-full border border-slate-300 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
-                />
+            {error && <p className="text-sm text-rose-600">{error}</p>}
+            {nodeErrors.length > 0 && (
+              <div className="no-print bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">
+                <p className="font-medium mb-1 flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4" />部分環節降級（已用替代內容續跑）
+                </p>
+                <ul className="list-disc pl-5 space-y-0.5">
+                  {nodeErrors.map((e, i) => <li key={i}>{e.node}：{e.message}</li>)}
+                </ul>
               </div>
-              <Button variant="secondary" icon={LinkIcon} loading={fetching} onClick={fetchUrl}>抓取</Button>
-            </div>
-            {fetchErr && <p className="text-sm text-amber-600 mb-2">{fetchErr}</p>}
-            <textarea
-              className="w-full border border-slate-300 rounded-lg p-3 text-sm h-32 focus:outline-none focus:ring-2 focus:ring-brand-200"
-              placeholder="或直接貼上職缺 JD 文字…"
-              value={jd}
-              onChange={(e) => setJd(e.target.value)}
-            />
-            <div className="flex flex-wrap gap-2 mt-3 items-center">
-              <Button onClick={() => run()} disabled={phase === "running" || !jd.trim()}
-                loading={phase === "running"} icon={Sparkles}>
-                開始（跑 8 個 agent）
-              </Button>
-              <Button variant="secondary" onClick={loadSample} disabled={phase === "running"}>載入範例 JD</Button>
-              {hasDocs && (
-                <>
-                  <Button variant="secondary" icon={FileDown} onClick={downloadDocx}>下載 Word</Button>
-                  <Button variant="secondary" icon={Printer} onClick={printDocs}>列印 / 匯出 PDF</Button>
-                </>
-              )}
-            </div>
-          </>
-        )}
-        {error && <p className="text-sm text-rose-600 mt-2">{error}</p>}
-      </Card>
+            )}
 
-      <div className="grid lg:grid-cols-[300px_1fr] gap-6 print:block">
-        <aside className="no-print">
-          <AgentTrace
-            done={done}
-            running={phase === "running"}
-            revisions={revisions}
-            status={status}
-            telemetry={telemetry}
-            nodeErrors={nodeErrors}
-          />
-        </aside>
-        <main className="space-y-4">
-          {profileWarning && (
-            <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-sm text-amber-800 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />{profileWarning}
-            </div>
-          )}
-          {phase === "approval" && (
-            <Card className="no-print border-brand-200 bg-brand-50/60 p-4 flex flex-wrap items-center gap-3">
-              <span className="text-sm font-medium flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-brand-600" />這份投遞包要核可嗎？
-              </span>
-              <Button size="sm" variant="primary" icon={CheckCircle2} onClick={() => decide("y")}>核可</Button>
-              <Button size="sm" variant="danger" icon={RefreshCw} onClick={() => decide("n")}>退回重做</Button>
-            </Card>
-          )}
-          {state.approved === true && (
-            <div className="no-print text-sm text-emerald-700 flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4" />已核可
-            </div>
-          )}
-          {state.approved === false && (
-            <div className="no-print text-sm text-rose-700 flex items-center gap-1.5">
-              <RefreshCw className="w-4 h-4" />已退回
-            </div>
-          )}
-
-          {nodeErrors.length > 0 && (
-            <div className="no-print bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">
-              <p className="font-medium mb-1 flex items-center gap-1.5">
-                <AlertTriangle className="w-4 h-4" />部分環節降級（已用替代內容續跑，可重試提升品質）
-              </p>
-              <ul className="list-disc pl-5 space-y-0.5">
-                {nodeErrors.map((e, i) => <li key={i}>{e.node}：{e.message}</li>)}
-              </ul>
-            </div>
-          )}
-
-          {state.match_report && <MatchCard m={state.match_report} />}
-          {state.company_brief && <CompanyCard c={state.company_brief} />}
-          {state.tailored_resume && (
-            <div>
-              <ResumeDoc
-                r={state.tailored_resume}
-                summary={edited?.resumeSummary}
-                bullets={edited?.resumeBullets}
-                onSummary={(v) => patch({ resumeSummary: v })}
-                onBullets={(v) => patch({ resumeBullets: v })}
-              />
-              <RefineChat
-                docType="resume"
-                current={`${edited?.resumeSummary ?? state.tailored_resume.summary}\n\n${edited?.resumeBullets ?? state.tailored_resume.bullets.join("\n")}`}
-                jd={jd} profile={refineProfile}
-                onApply={(u) => patch({
-                  ...(u.summary !== undefined ? { resumeSummary: u.summary } : {}),
-                  ...(u.bullets ? { resumeBullets: u.bullets.join("\n") } : {}),
-                })}
-              />
-            </div>
-          )}
-          {state.cover_letter && (
-            <div>
-              <CoverLetterDoc
-                c={state.cover_letter}
-                subject={edited?.coverSubject}
-                body={edited?.coverBody}
-                onSubject={(v) => patch({ coverSubject: v })}
-                onBody={(v) => patch({ coverBody: v })}
-              />
-              <RefineChat
-                docType="cover"
-                current={`主旨：${edited?.coverSubject ?? state.cover_letter.subject ?? ""}\n\n${edited?.coverBody ?? state.cover_letter.body}`}
-                jd={jd} profile={refineProfile}
-                onApply={(u) => patch({
-                  ...(u.subject !== undefined ? { coverSubject: u.subject } : {}),
-                  ...(u.body !== undefined ? { coverBody: u.body } : {}),
-                })}
-              />
-            </div>
-          )}
-          {state.interview_kit && <InterviewKitDoc k={state.interview_kit} />}
-          {state.critique && <CritiqueCard q={state.critique} />}
-
-          {!hasDocs && phase !== "running" && (
-            <Card className="p-2">
-              <EmptyState
-                icon={Network}
-                title="貼上 JD 後按「開始」"
-                desc="這裡會即時長出投遞包成品（客製履歷／求職信／面試準備／公司情報），左側可看 8 個 agent 的即時編排。"
-              />
-            </Card>
-          )}
-        </main>
-      </div>
+            {hasDocs ? (
+              <Card className="p-4">
+                <div className="flex flex-wrap gap-1.5 border-b border-slate-200 pb-2 mb-3">
+                  {pages.map((p, i) => (
+                    <button key={p.key} type="button" onClick={() => setPage(i)}
+                      aria-current={i === curPage ? "page" : undefined}
+                      className={`px-3 py-1.5 rounded-lg text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${
+                        i === curPage ? "bg-brand-600 text-white" : "text-slate-600 hover:bg-slate-100"
+                      }`}>{p.label}</button>
+                  ))}
+                </div>
+                <div className="max-h-[62vh] overflow-auto pr-1">{docFor(pages[curPage].key)}</div>
+                <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-200">
+                  <Button variant="secondary" size="sm" icon={ChevronLeft}
+                    disabled={curPage <= 0} onClick={() => setPage(curPage - 1)}>上一頁</Button>
+                  <span className="text-sm text-slate-500">{curPage + 1} / {pages.length}</span>
+                  <Button variant="secondary" size="sm"
+                    disabled={curPage >= pages.length - 1} onClick={() => setPage(curPage + 1)}>
+                    下一頁<ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              </Card>
+            ) : phase === "running" ? (
+              <Card className="p-2">
+                <EmptyState icon={Network} title="正在產生投遞包…"
+                  desc="左側可看多 agent 的即時編排，成品會逐步出現。離開或重新整理都不會中斷。" />
+              </Card>
+            ) : null}
+          </main>
+        </div>
+      )}
     </div>
   )
 }

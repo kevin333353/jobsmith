@@ -5,11 +5,15 @@ import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
 import { EmptyState } from "../ui/EmptyState"
 import { ScoreRing } from "../components/ScoreRing"
-import { MessagesSquare, CheckCircle2, AlertTriangle, RefreshCw, ArrowRight } from "../ui/icons"
+import { MessagesSquare, CheckCircle2, AlertTriangle, RefreshCw, ArrowRight, Archive } from "../ui/icons"
+
+interface PkgPick {
+  id: number; job_title: string; company: string; match_score: number; status?: string
+}
 
 export function InterviewView(
-  { fallbackProfile, seed }:
-  { fallbackProfile?: UserProfile | null; seed?: Seed | null },
+  { active, fallbackProfile, seed }:
+  { active?: boolean; fallbackProfile?: UserProfile | null; seed?: Seed | null },
 ) {
   const [jd, setJd] = useState("")
   const [phase, setPhase] = useState<"idle" | "running" | "done">("idle")
@@ -21,8 +25,27 @@ export function InterviewView(
   const [summary, setSummary] = useState<InterviewSummary | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  const [packages, setPackages] = useState<PkgPick[]>([])
   // 本場面試實際使用的履歷（種子帶入的投遞包履歷，或共用的 fallback）；start() 時固定下來。
   const activeProfile = useRef<UserProfile | null>(fallbackProfile ?? null)
+
+  async function loadPackages() {
+    try {
+      const d = await (await fetch("/api/history")).json()
+      setPackages(((d.packages || []) as PkgPick[]).filter((p) => p.status !== "running"))
+    } catch { /* 靜默 */ }
+  }
+
+  // 用「我的投遞包」某一筆的 JD + 履歷直接開始模擬。
+  async function startFromPackage(id: number) {
+    try {
+      const d = await (await fetch(`/api/history/${id}`)).json()
+      if (d && d.jd_text) start(d.jd_text, d.profile ?? fallbackProfile ?? null)
+      else setError("這筆投遞包沒有可用的 JD。")
+    } catch {
+      setError("載入投遞包失敗，請稍後再試。")
+    }
+  }
 
   async function loadSample() {
     const j = await (await fetch("/api/sample")).json()
@@ -105,12 +128,45 @@ export function InterviewView(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed?.nonce])
 
-  // ---- idle：輸入 JD ----
+  // 切到此分頁、且在輸入階段時載入「我的投遞包」清單供挑選。
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (active && phase === "idle") loadPackages()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, phase])
+
+  // ---- idle：選投遞包或輸入 JD ----
   if (phase === "idle") {
     return (
-      <div>
-        <Card className="p-5 mb-5">
-          <p className="text-sm text-slate-600 mb-2">貼上目標職缺 JD，AI 面試官會依你的履歷出題、逐題給回饋與評分。</p>
+      <div className="space-y-5">
+        {packages.length > 0 && (
+          <Card className="p-5">
+            <h3 className="font-semibold mb-1 flex items-center gap-2">
+              <Archive className="w-4 h-4 text-brand-600" />用「我的投遞包」開始模擬
+            </h3>
+            <p className="text-sm text-slate-500 mb-3">選一筆投遞包，用它的 JD 與履歷直接開始面試。</p>
+            <div className="space-y-2 max-h-72 overflow-auto">
+              {packages.map((p) => (
+                <button key={p.id} onClick={() => startFromPackage(p.id)}
+                  className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-brand-300 hover:bg-brand-50/40 transition text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
+                  <div className={`shrink-0 w-10 h-10 rounded-lg grid place-items-center font-bold text-white text-sm ${
+                    p.match_score >= 80 ? "bg-emerald-600" : p.match_score >= 60 ? "bg-amber-500" : "bg-slate-400"}`}>
+                    {p.match_score}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-800 truncate">{p.job_title}</p>
+                    <p className="text-xs text-slate-500 truncate">{p.company || "—"}</p>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-slate-400 ml-auto shrink-0" />
+                </button>
+              ))}
+            </div>
+          </Card>
+        )}
+        <Card className="p-5">
+          <p className="text-sm text-slate-600 mb-2">
+            {packages.length > 0 ? "或貼上" : "貼上"}目標職缺 JD，AI 面試官會依你的履歷出題、逐題給回饋與評分。
+          </p>
           <textarea
             className="w-full border border-slate-300 rounded-lg p-3 text-sm h-32 focus:outline-none focus:ring-2 focus:ring-brand-200"
             placeholder="貼上職缺 JD 文字…" value={jd} onChange={(e) => setJd(e.target.value)}
@@ -121,7 +177,7 @@ export function InterviewView(
           </div>
           {error && <p className="text-sm text-rose-600 mt-2">{error}</p>}
         </Card>
-        {!fallbackProfile && (
+        {!fallbackProfile && packages.length === 0 && (
           <Card className="p-2">
             <EmptyState icon={MessagesSquare} title="先到「自動找職缺」或「履歷健檢」提供履歷"
               desc="面試官會依你的真實背景出題；沒有履歷時會用範例背景示意。" />

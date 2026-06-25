@@ -52,36 +52,57 @@ def test_sample_endpoint():
     assert "工程師" in r.json()["jd_text"]
 
 
-def test_run_streams_to_interrupt_then_resume(monkeypatch):
+def _run_bg(client, payload):
+    """背景產生：POST /api/run 後等該 run 的 future 完成（確定性），回 (resp_json, events)。"""
+    r = client.post("/api/run", json=payload)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    server_mod._RUNS[d["thread_id"]].future.result(timeout=15)  # 等背景跑完
+    events = client.get(f"/api/run/events/{d['thread_id']}").json()["events"]
+    return d, events
+
+
+def test_run_creates_record_immediately_and_returns_ids(monkeypatch):
+    # 一按產生投遞包就回 thread_id/package_id，且「我的投遞包」立刻有一筆紀錄。
     _patch_agents(monkeypatch)
     client = TestClient(server_mod.app)
-
-    r = client.post("/api/run", json={"jd_text": "一些 JD"})
+    r = client.post("/api/run", json={"jd_text": "JD"})
     assert r.status_code == 200
-    events = _parse_sse(r.text)
+    d = r.json()
+    assert isinstance(d["thread_id"], str) and isinstance(d["package_id"], int)
+    assert server_mod._history.get_package(d["package_id"]) is not None
+    server_mod._RUNS[d["thread_id"]].future.result(timeout=15)  # 等背景跑完，避免 unpatch 後跑到真 agent
+
+
+def test_run_completes_in_background_and_saves_pending(monkeypatch):
+    # 背景跑到底、不停核可關卡；done 帶 package_id；該筆存成 done 且待審(approved=0)。
+    _patch_agents(monkeypatch)
+    client = TestClient(server_mod.app)
+    d, events = _run_bg(client, {"jd_text": "一些 JD"})
     types = [e["type"] for e in events]
-    assert types[0] == "start"
-    assert "node" in types
-    assert types[-1] == "interrupt"
-    thread_id = events[0]["thread_id"]
-
-    r2 = client.post("/api/resume", json={"thread_id": thread_id, "decision": "y"})
-    assert r2.status_code == 200
-    ev2 = _parse_sse(r2.text)
-    assert ev2[-1]["type"] == "done"
-    assert any(e.get("type") == "node" for e in ev2)
+    assert "interrupt" not in types and "node" in types and types[-1] == "done"
+    assert events[-1]["package_id"] == d["package_id"]
+    full = server_mod._history.get_package(d["package_id"])
+    assert full["status"] == "done" and full["approved"] == 0
 
 
-def test_run_stop_path_finishes_without_interrupt(monkeypatch):
+def test_run_events_unknown_thread_returns_not_found():
+    # 不在記憶體的 thread（已清理/伺服器重啟）→ found=False，前端改從歷史載入。
+    client = TestClient(server_mod.app)
+    d = client.get("/api/run/events/does-not-exist").json()
+    assert d["found"] is False and d["done"] is True
+
+
+def test_run_stop_path_finalizes_record(monkeypatch):
+    # 低適配 → supervisor 停做：仍要收尾成 done（不卡「進行中」），即使沒有客製履歷。
     _patch_agents(monkeypatch)
     monkeypatch.setattr(graph_mod, "match_profile",
                         lambda job, profile: MatchReport(score=30, recommend_proceed=False, reason="不符"))
     client = TestClient(server_mod.app)
-    r = client.post("/api/run", json={"jd_text": "一些 JD"})
-    events = _parse_sse(r.text)
+    d, events = _run_bg(client, {"jd_text": "一些 JD"})
     types = [e["type"] for e in events]
-    assert "interrupt" not in types
-    assert types[-1] == "done"
+    assert "interrupt" not in types and types[-1] == "done"
+    assert server_mod._history.get_package(d["package_id"])["status"] == "done"
 
 
 def test_run_uses_posted_profile_not_demo(monkeypatch):
@@ -95,12 +116,10 @@ def test_run_uses_posted_profile_not_demo(monkeypatch):
     monkeypatch.setattr(graph_mod, "tailor_resume", capture)
 
     client = TestClient(server_mod.app)
-    r = client.post("/api/run", json={
+    _run_bg(client, {
         "jd_text": "JD",
         "profile": {"name": "測試真人", "summary": "資深 Agent 工程師", "skills": ["LangGraph"]},
     })
-    assert r.status_code == 200
-    _parse_sse(r.text)
     assert seen["name"] == "測試真人"      # 用 posted profile
     assert seen["name"] != "陳小安"        # 不是 demo profile
 
@@ -115,13 +134,12 @@ def test_run_falls_back_to_demo_profile_when_absent(monkeypatch):
     monkeypatch.setattr(graph_mod, "tailor_resume", capture)
 
     client = TestClient(server_mod.app)
-    r = client.post("/api/run", json={"jd_text": "JD"})  # 不帶 profile
-    _parse_sse(r.text)
+    _run_bg(client, {"jd_text": "JD"})  # 不帶 profile
     assert seen["name"] == "陳小安"        # 後備 demo profile
 
 
 def test_run_degrades_gracefully_on_agent_failure(monkeypatch):
-    # 單一 agent 例外不應炸掉整條 SSE：仍走到人工關卡，並發 node_error 提示
+    # 單一 agent 例外不應炸掉整條流程：仍跑到底，並發 node_error 提示
     _patch_agents(monkeypatch)
 
     def boom(job, profile, feedback=None):
@@ -129,17 +147,16 @@ def test_run_degrades_gracefully_on_agent_failure(monkeypatch):
     monkeypatch.setattr(graph_mod, "tailor_resume", boom)
 
     client = TestClient(server_mod.app)
-    r = client.post("/api/run", json={"jd_text": "JD"})
-    events = _parse_sse(r.text)
+    d, events = _run_bg(client, {"jd_text": "JD"})
     types = [e["type"] for e in events]
     assert "node_error" in types
-    assert types[-1] == "interrupt"        # 流程沒被中斷
+    assert types[-1] == "done"             # 流程沒被中斷
     err = next(e for e in events if e["type"] == "node_error")
     assert err["node"] == "resume_tailor"
 
 
 def test_run_continues_when_match_agent_crashes(monkeypatch):
-    # match agent 崩潰不可被誤判為「低適配 → 停止」：仍要產出降級投遞包並走到人工關卡
+    # match agent 崩潰不可被誤判為「低適配 → 停止」：仍要產出降級投遞包並跑到底
     _patch_agents(monkeypatch)
 
     def boom(job, profile):
@@ -147,42 +164,35 @@ def test_run_continues_when_match_agent_crashes(monkeypatch):
     monkeypatch.setattr(graph_mod, "match_profile", boom)
 
     client = TestClient(server_mod.app)
-    r = client.post("/api/run", json={"jd_text": "JD"})
-    events = _parse_sse(r.text)
+    d, events = _run_bg(client, {"jd_text": "JD"})
     types = [e["type"] for e in events]
-    assert types[-1] == "interrupt"        # 沒有在 match 後就 stop
+    assert types[-1] == "done"             # 沒有在 match 後就 stop
     assert any(e.get("type") == "node_error" and e.get("node") == "match" for e in events)
     nodes = [e.get("node") for e in events if e.get("type") == "node"]
     assert "resume_tailor" in nodes        # 下游降級投遞包仍有產出
 
 
-def test_run_partial_profile_returns_sse_error_not_500(monkeypatch):
-    # 缺必填欄位的 profile 應回友善 SSE error（在 generator 內），而非 500
+def test_run_partial_profile_returns_400_not_500(monkeypatch):
+    # 缺必填欄位的 profile 應回 400 友善訊息，而非 500（且不建立進行中紀錄）
     _patch_agents(monkeypatch)
     client = TestClient(server_mod.app)
     r = client.post("/api/run", json={"jd_text": "JD", "profile": {"skills": ["x"]}})
-    assert r.status_code == 200            # 串流本身成功
-    events = _parse_sse(r.text)
-    assert events[0]["type"] == "start"
-    assert any(e["type"] == "error" for e in events)
-    assert not any(e["type"] == "node" for e in events)
+    assert r.status_code == 400
+    assert "error" in r.json()
 
 
 def test_run_warns_when_using_demo_profile(monkeypatch):
     # 未帶真實履歷 → 用 demo，但要明確發 profile_warning 提醒
     _patch_agents(monkeypatch)
     client = TestClient(server_mod.app)
-    r = client.post("/api/run", json={"jd_text": "JD"})
-    events = _parse_sse(r.text)
+    _, events = _run_bg(client, {"jd_text": "JD"})
     assert any(e["type"] == "profile_warning" for e in events)
 
 
 def test_run_no_warning_when_real_profile(monkeypatch):
     _patch_agents(monkeypatch)
     client = TestClient(server_mod.app)
-    r = client.post("/api/run", json={
-        "jd_text": "JD", "profile": {"name": "真人", "summary": "工程師"}})
-    events = _parse_sse(r.text)
+    _, events = _run_bg(client, {"jd_text": "JD", "profile": {"name": "真人", "summary": "工程師"}})
     assert not any(e["type"] == "profile_warning" for e in events)
 
 
@@ -190,9 +200,7 @@ def test_run_emits_per_node_telemetry(monkeypatch):
     # 每個經 _safe 的節點都應發 telemetry 事件（含延遲；mock 下 token=0）
     _patch_agents(monkeypatch)
     client = TestClient(server_mod.app)
-    r = client.post("/api/run", json={
-        "jd_text": "JD", "profile": {"name": "真人", "summary": "工程師"}})
-    events = _parse_sse(r.text)
+    _, events = _run_bg(client, {"jd_text": "JD", "profile": {"name": "真人", "summary": "工程師"}})
     tel = [e for e in events if e["type"] == "telemetry"]
     assert tel, "應發出逐節點 telemetry"
     assert all("node" in t and "latency_ms" in t for t in tel)
@@ -201,7 +209,7 @@ def test_run_emits_per_node_telemetry(monkeypatch):
 
 
 def test_run_telemetry_attributes_tokens_to_correct_node(monkeypatch):
-    # 回歸：非首節點的 token 也要記到（修 contextvar 跨 SSE threadpool yield 遺失的 bug）
+    # 回歸：非首節點的 token 也要正確歸帳到該節點。
     from app import telemetry as tele
     _patch_agents(monkeypatch)
 
@@ -211,8 +219,8 @@ def test_run_telemetry_attributes_tokens_to_correct_node(monkeypatch):
     monkeypatch.setattr(graph_mod, "match_profile", match_with_usage)
 
     client = TestClient(server_mod.app)
-    r = client.post("/api/run", json={"jd_text": "JD", "profile": {"name": "x", "summary": "y"}})
-    tel = {e["node"]: e for e in _parse_sse(r.text) if e["type"] == "telemetry"}
+    _, events = _run_bg(client, {"jd_text": "JD", "profile": {"name": "x", "summary": "y"}})
+    tel = {e["node"]: e for e in events if e["type"] == "telemetry"}
     assert tel["match"]["input_tokens"] == 100   # match 是非首節點，仍正確歸帳
     assert tel["match"]["output_tokens"] == 50
     assert tel["match"]["calls"] == 1
@@ -365,6 +373,26 @@ def test_backend_test_openai_probe(monkeypatch):
     client = TestClient(server_mod.app)
     r = client.post("/api/backend/test", json={"backend": "openai"})
     assert r.status_code == 200 and r.json()["ok"] is True
+
+
+def test_history_approve_endpoint_marks_approved(monkeypatch):
+    # 背景產生待審包後，POST /api/history/{id}/approve 應把它標記為已核可。
+    _patch_agents(monkeypatch)
+    client = TestClient(server_mod.app)
+    d, _ = _run_bg(client, {"jd_text": "JD"})
+    pid = d["package_id"]
+    assert client.post(f"/api/history/{pid}/approve").json()["ok"] is True
+    assert server_mod._history.get_package(pid)["approved"] == 1
+
+
+def test_favicon_is_served():
+    # 回歸：/favicon.svg 必須由後端提供（不在 /assets 底下），否則分頁圖示 404 沿用舊圖。
+    client = TestClient(server_mod.app)
+    r = client.get("/favicon.svg")
+    assert r.status_code == 200
+    assert "svg" in r.headers.get("content-type", "")
+    # 瀏覽器會自動請求 /favicon.ico，也要回 svg 而非 404
+    assert client.get("/favicon.ico").status_code == 200
 
 
 def test_index_serves_html():

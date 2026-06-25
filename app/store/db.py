@@ -25,10 +25,13 @@ def _init(conn: sqlite3.Connection) -> None:
         "id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, job_title TEXT, company TEXT, "
         "match_score INTEGER, jd_text TEXT, profile_json TEXT, package_json TEXT, approved INTEGER, "
         "thread_id TEXT)")
-    # 既有資料庫（M11 前建立）缺 thread_id 欄位時補上——冪等存檔用。
+    # 既有資料庫缺欄位時補上：thread_id（冪等存檔用）、status（背景產生的生命週期）。
     cols = {r[1] for r in conn.execute("PRAGMA table_info(packages)").fetchall()}
     if "thread_id" not in cols:
         conn.execute("ALTER TABLE packages ADD COLUMN thread_id TEXT")
+    if "status" not in cols:
+        # 既有列視為已完成；新列由背景流程建立時為 'running'，跑完轉 'done'（失敗 'failed'）。
+        conn.execute("ALTER TABLE packages ADD COLUMN status TEXT DEFAULT 'done'")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS user_memory("
         "id INTEGER PRIMARY KEY CHECK (id=1), profile_json TEXT, preferences_json TEXT, updated_at TEXT)")

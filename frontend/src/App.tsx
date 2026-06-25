@@ -18,10 +18,10 @@ type Tab = "search" | "searches" | "resume" | "pipeline" | "interview" | "histor
 const NAV: NavItem<Tab>[] = [
   { id: "search", label: "自動找職缺", icon: Compass },
   { id: "searches", label: "搜尋紀錄", icon: Search },
-  { id: "resume", label: "履歷健檢", icon: FileChartColumn },
   { id: "pipeline", label: "投遞包工作台", icon: Workflow },
-  { id: "interview", label: "面試模擬", icon: MessagesSquare },
   { id: "history", label: "我的投遞包", icon: Archive },
+  { id: "interview", label: "面試模擬", icon: MessagesSquare },
+  { id: "resume", label: "履歷健檢", icon: FileChartColumn },
 ]
 const FOOTER: NavItem<Tab>[] = [{ id: "settings", label: "個人化", icon: Settings2 }]
 
@@ -85,10 +85,11 @@ export default function App() {
             <ResumeHealthView onProfile={setProfile} />
           </div>
           <div className={tab === "pipeline" ? "" : "hidden"}>
-            <PipelineView seed={seed} fallbackProfile={profile} preferences={preferences} onBack={() => setTab("search")} />
+            <PipelineView seed={seed} fallbackProfile={profile} preferences={preferences}
+              onBack={() => setTab("search")} />
           </div>
           <div className={tab === "interview" ? "" : "hidden"}>
-            <InterviewView fallbackProfile={profile} seed={interviewSeed} />
+            <InterviewView active={tab === "interview"} fallbackProfile={profile} seed={interviewSeed} />
           </div>
           <div className={tab === "history" ? "" : "hidden"}>
             <HistoryView active={tab === "history"} onReopen={pickJob} onInterview={startInterview} />

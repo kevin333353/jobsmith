@@ -181,6 +181,10 @@ def critic_node(state: CopilotState) -> dict:
 
 
 def human_gate_node(state: CopilotState) -> dict:
+    # 批次模式：略過互動核可關卡，直接跑到底並以「待審」存檔；
+    # 使用者事後到「我的投遞包」逐一核可或刪除，不必逐一卡在核可關卡。
+    if state.get("batch"):
+        return {"approved": None}
     decision = interrupt({
         "message": "請審閱投遞包並決定是否核可",
         "match_score": state["match_report"].score,

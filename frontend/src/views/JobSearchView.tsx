@@ -366,12 +366,6 @@ export function JobSearchView(
                 }`}>{o.l}</button>
             ))}
           </div>
-          {linkedin && (
-            <a href={linkedin} target="_blank" rel="noreferrer"
-              className="text-sm text-brand-600 hover:underline inline-flex items-center gap-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
-              也到 LinkedIn 搜尋 <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-          )}
         </div>
       )}
 

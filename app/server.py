@@ -2,15 +2,15 @@
 import json
 import os
 import shutil
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, UploadFile, Body
-from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from langgraph.types import Command
 
 from app import settings
 from app.cli import load_profile
@@ -33,6 +33,7 @@ app = FastAPI(title="Jobsmith")
 # 單一圖實例：/run 與 /resume 共用同一個 MemorySaver（per-process）。
 GRAPH = build_graph()
 _appdb.init_db()  # 應用層 sqlite（歷史/記憶）
+_history.mark_stale_running_failed()  # 啟動時把上次殘留的「進行中」收尾為 failed
 
 _ROOT = Path(__file__).parent.parent  # 專案根（app/ 的上一層）
 _FRONTEND_DIST = _ROOT / "frontend" / "dist"  # Vite 建置產物（產品級前端）
@@ -59,46 +60,81 @@ def _sse(obj: dict) -> str:
     ) + "\n\n"
 
 
-def _stream(graph_input, config):
-    """跑 graph.stream(updates)，逐節點 yield SSE；結束時判斷是否停在 interrupt。
+# ---- 背景投遞包流程：產生投遞包改成射後不理的背景工作 ----
+# 一按就在「我的投遞包」建紀錄、伺服器背景跑完；瀏覽器重新整理/返回/切分頁都不中斷。
+# 單執行緒佇列逐筆處理，避免多個 graph 同時寫共用的 checkpoint sqlite。
+_RUN_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pipeline")
+_RUNS: dict[str, "_Run"] = {}
+_RUNS_LOCK = threading.Lock()
 
-    telemetry 由每個節點的 _safe 自行 begin/end（不在這裡 start_run——同步產生器被
-    Starlette 丟 threadpool 時 contextvar 不跨 next() 存活，集中式蒐集會掉資料）。
-    """
-    for chunk in GRAPH.stream(graph_input, config, stream_mode="updates"):
-        for node, update in chunk.items():
-            if node == "__interrupt__":
-                continue
-            update = update or {}
-            # 優雅降級：該節點 agent 失敗（已回降級 artifact）時，額外發 node_error 提示前端。
-            for err in update.get("errors") or []:
-                yield _sse({"type": "node_error", "node": err.get("node", node),
-                            "message": err.get("message", "")})
-            # telemetry：逐節點 token/成本/延遲（供前端顯示 agent 工程的可觀測性）。
-            for t in update.get("telemetry") or []:
-                yield _sse({"type": "telemetry", **t})
-            yield _sse({"type": "node", "node": node, "data": serialize_update(update)})
-    snapshot = GRAPH.get_state(config)
-    if snapshot.next:  # 還有待跑節點 → 停在 human_gate interrupt
-        payload = {}
+
+class _Run:
+    """單次背景產生的進度緩衝：事件序列 + 完成旗標，供前端輪詢（重新整理可從 0 重播）。"""
+
+    def __init__(self, thread_id: str, package_id: int):
+        self.thread_id = thread_id
+        self.package_id = package_id
+        self.events: list[dict] = []
+        self.done = False
+        self.future = None
+        self._lock = threading.Lock()
+
+    def emit(self, ev: dict) -> None:
+        with self._lock:
+            self.events.append(ev)
+
+    def finish(self) -> None:
+        with self._lock:
+            self.done = True
+
+    def snapshot(self, since: int) -> tuple[list[dict], bool]:
+        with self._lock:
+            return self.events[since:], self.done
+
+
+def _prune_runs() -> None:
+    """避免長時間累積：超過 15 筆時丟掉較舊的已完成紀錄（之後輪詢會改從歷史載入）。"""
+    if len(_RUNS) <= 15:
+        return
+    for k in [k for k, r in _RUNS.items() if r.done][:-5]:
+        _RUNS.pop(k, None)
+
+
+def _jd_title(jd_text: str) -> str:
+    """從 JD 取第一行非空白當暫時標題（解析完成前先給使用者看得懂的名稱）。"""
+    for line in (jd_text or "").splitlines():
+        s = line.strip()
+        if s:
+            return s[:60]
+    return "（產生中）"
+
+
+def _run_pipeline_bg(run: "_Run", initial: dict, config: dict) -> None:
+    """背景執行緒跑整張 graph：逐節點把事件寫進 run 緩衝，跑完更新歷史那筆為 done。"""
+    try:
+        for chunk in GRAPH.stream(initial, config, stream_mode="updates"):
+            for node, update in chunk.items():
+                if node == "__interrupt__":
+                    continue
+                update = update or {}
+                for err in update.get("errors") or []:
+                    run.emit({"type": "node_error", "node": err.get("node", node),
+                              "message": err.get("message", "")})
+                for t in update.get("telemetry") or []:
+                    run.emit({"type": "telemetry", **t})
+                run.emit({"type": "node", "node": node, "data": serialize_update(update)})
+        snapshot = GRAPH.get_state(config)
+        final = serialize_update(snapshot.values)
+        _history.update_package_result(run.package_id, final)
+        run.emit({"type": "done", "package_id": run.package_id})
+    except Exception as exc:  # noqa: BLE001 — 背景出錯也要收尾，不讓那筆永遠卡「進行中」
+        run.emit({"type": "error", "message": f"{type(exc).__name__}: {str(exc)[:200]}"})
         try:
-            if snapshot.tasks and snapshot.tasks[0].interrupts:
-                payload = snapshot.tasks[0].interrupts[0].value
-        except Exception:
-            payload = {}
-        yield _sse({"type": "interrupt",
-                    "thread_id": config["configurable"]["thread_id"],
-                    "payload": payload})
-    else:
-        # 終局：自動把完成的投遞包存進歷史（有實際成品才存；失敗不影響串流）
-        try:
-            final = serialize_update(snapshot.values)
-            if final.get("tailored_resume") or final.get("cover_letter") or final.get("interview_kit"):
-                # 帶 thread_id → 冪等存檔，重送 resume 不會重複存同一份投遞包。
-                _history.save_package(final, thread_id=config["configurable"]["thread_id"])
+            _history.set_status(run.package_id, "failed")
         except Exception:
             pass
-        yield _sse({"type": "done"})
+    finally:
+        run.finish()
 
 
 class RunBody(BaseModel):
@@ -109,11 +145,8 @@ class RunBody(BaseModel):
     profile_path: str = "data/demo_profile.json"
     # 個人化偏好（語氣/目標職稱/年資/想強調技能）；套進 profile 讓各生成 agent 採用。
     preferences: dict | None = None
-
-
-class ResumeBody(BaseModel):
-    thread_id: str
-    decision: str
+    # 批次模式：清單逐一無人值守產生時為 True，跳過互動核可、直接存成「待審」。
+    batch: bool = False
 
 
 # 注意：以下兩個串流端點用一般 def（非 async def），讓 Starlette 在 threadpool 執行
@@ -623,45 +656,54 @@ def _apply_preferences(profile: Profile, prefs: dict | None) -> Profile:
 
 @app.post("/api/run")
 def run(body: RunBody):
+    """產生投遞包（背景、射後不理）：立刻在『我的投遞包』建一筆進行中並回傳 thread_id/package_id；
+    pipeline 在伺服器背景跑完（瀏覽器重新整理/返回/切分頁都不中斷），前端用 /api/run/events 輪詢進度。
+    """
+    # 履歷壞/缺 → 回 400 友善訊息（不建立進行中紀錄）。
+    try:
+        profile = _resolve_profile(body)
+        profile = _apply_preferences(profile, body.preferences)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {"error": f"履歷資料無法使用，請重新上傳履歷再試。（{type(exc).__name__}）"},
+            status_code=400)
+
     thread_id = uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
-
-    def gen():
-        yield _sse({"type": "start", "thread_id": thread_id})
-        # 在 generator 內解析履歷，壞/缺履歷回友善 SSE error 而非 500（與其他端點一致）。
-        try:
-            profile = _resolve_profile(body)
-            profile = _apply_preferences(profile, body.preferences)
-        except Exception as exc:
-            yield _sse({"type": "error",
-                        "message": f"履歷資料無法使用，請重新上傳履歷再試。（{type(exc).__name__}）"})
-            return
-        # 沒帶真實履歷 → 用範例 demo，明確提醒使用者（避免把假人投遞包當成自己的）。
-        if not body.profile:
-            yield _sse({"type": "profile_warning",
-                        "message": "目前使用範例履歷示意（非你本人背景）。"
-                                   "請先到「自動找職缺」或「履歷健檢」提供你的履歷，再產生個人化投遞包。"})
-        initial = {
-            "jd_text": body.jd_text, "profile": profile,
-            "parsed_job": None, "match_report": None, "supervisor_decision": None,
-            "company_brief": None, "tailored_resume": None, "cover_letter": None,
-            "interview_kit": None, "critique": None, "revision_count": 0,
-            "approved": None, "errors": [], "telemetry": [],
-        }
-        yield from _stream(initial, config)
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    pid = _history.create_running_package(
+        thread_id, body.jd_text, _jd_title(body.jd_text), profile.model_dump())
+    initial = {
+        "jd_text": body.jd_text, "profile": profile,
+        "parsed_job": None, "match_report": None, "supervisor_decision": None,
+        "company_brief": None, "tailored_resume": None, "cover_letter": None,
+        "interview_kit": None, "critique": None, "revision_count": 0,
+        # batch=True：背景跑、略過互動核可關卡（核可改到「我的投遞包」做）。
+        "approved": None, "batch": True, "errors": [], "telemetry": [],
+    }
+    run_obj = _Run(thread_id, pid)
+    # 沒帶真實履歷 → 用範例 demo，明確提醒使用者（避免把假人投遞包當成自己的）。
+    if not body.profile:
+        run_obj.emit({"type": "profile_warning",
+                      "message": "目前使用範例履歷示意（非你本人背景）。"
+                                 "請先到「自動找職缺」或「履歷健檢」提供你的履歷，再產生個人化投遞包。"})
+    with _RUNS_LOCK:
+        _prune_runs()
+        _RUNS[thread_id] = run_obj
+    run_obj.future = _RUN_EXECUTOR.submit(_run_pipeline_bg, run_obj, initial, config)
+    return {"thread_id": thread_id, "package_id": pid}
 
 
-@app.post("/api/resume")
-def resume(body: ResumeBody):
-    config = {"configurable": {"thread_id": body.thread_id}}
+@app.get("/api/run/events/{thread_id}")
+def run_events(thread_id: str, since: int = 0):
+    """輪詢某次背景產生的進度事件（since=已收到的事件數，重新整理時用 0 重播全部）。
 
-    def gen():
-        yield _sse({"type": "start", "thread_id": body.thread_id})
-        yield from _stream(Command(resume=body.decision), config)
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    found=False 代表該 run 不在記憶體（已清理或伺服器重啟過）→ 前端改從『我的投遞包』載入結果。
+    """
+    run_obj = _RUNS.get(thread_id)
+    if run_obj is None:
+        return {"found": False, "events": [], "done": True}
+    events, done = run_obj.snapshot(since)
+    return {"found": True, "events": events, "done": done, "package_id": run_obj.package_id}
 
 
 @app.get("/api/memory")
@@ -690,6 +732,12 @@ def history_get(pid: int):
     if pkg is None:
         return JSONResponse({"error": "找不到該投遞包"}, status_code=404)
     return pkg
+
+
+@app.post("/api/history/{pid}/approve")
+def history_approve(pid: int):
+    _history.set_approved(pid, True)
+    return {"ok": True}
 
 
 @app.delete("/api/history/{pid}")
@@ -737,3 +785,33 @@ def index():
     return HTMLResponse(
         "<h1>前端尚未建置</h1><p>請先執行 <code>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</code>，"
         "再重新整理。</p>", status_code=503)
+
+
+# dist 根目錄的靜態檔（favicon 等）不在 /assets 底下，需個別提供；
+# 否則 /favicon.svg 會 404，瀏覽器分頁圖示沿用預設或舊快取（換了 logo 也看不到）。
+def _serve_root_static(name: str, media: str):
+    f = _FRONTEND_DIST / name
+    if f.exists():
+        return FileResponse(str(f), media_type=media)
+    return Response(status_code=404)
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def favicon_svg():
+    return _serve_root_static("favicon.svg", "image/svg+xml")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico():
+    # 沒有 .ico；回 svg（瀏覽器自動請求 /favicon.ico 時也不再 404）。
+    return _serve_root_static("favicon.svg", "image/svg+xml")
+
+
+@app.get("/logo512.png", include_in_schema=False)
+def logo512():
+    return _serve_root_static("logo512.png", "image/png")
+
+
+@app.get("/icons.svg", include_in_schema=False)
+def icons_svg():
+    return _serve_root_static("icons.svg", "image/svg+xml")
