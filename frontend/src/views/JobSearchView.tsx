@@ -10,7 +10,7 @@ import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
 import { Skeleton } from "../ui/Skeleton"
 import { EmptyState } from "../ui/EmptyState"
-import { Search, Upload, Loader2, ExternalLink, AlertTriangle, CheckCircle2, XCircle, Target, Building2, X } from "../ui/icons"
+import { Search, Upload, Loader2, ExternalLink, AlertTriangle, CheckCircle2, XCircle, Target, Building2, Layers, X } from "../ui/icons"
 
 const SNAP_KEY = "copilot.jobsearch.v1"  // 上次搜尋結果快取（重新整理/重開沿用）
 
@@ -49,6 +49,7 @@ export function JobSearchView(
   const [companyInput, setCompanyInput] = useState("")
   const [file, setFile] = useState<File | null>(null)
   const [searchedCompanies, setSearchedCompanies] = useState<string[]>([])
+  const [pages, setPages] = useState(2)  // 每個來源抓幾頁（越多越全、但越慢）
 
   // 還原上次搜尋結果：重新整理 / 重開不必重找。
   useEffect(() => {
@@ -66,6 +67,7 @@ export function JobSearchView(
       if (typeof s.linkedin === "string") setLinkedin(s.linkedin)
       if (typeof s.fallback === "boolean") setFallback(s.fallback)
       if (Array.isArray(s.searchedCompanies)) setSearchedCompanies(s.searchedCompanies)
+      if (typeof s.pages === "number") setPages(s.pages)
       if (s.profile) { setProfile(s.profile as UserProfile); onProfile?.(s.profile as UserProfile) }
       if (Array.isArray(s.jobs) && s.jobs.length) setDone(true)
     } catch { /* 忽略毀損快取 */ }
@@ -76,11 +78,11 @@ export function JobSearchView(
     try {
       localStorage.setItem(SNAP_KEY, JSON.stringify({
         text, companies, jobs, companyJobs, skillGap, queries, sources,
-        linkedin, fallback, searchedCompanies, profile,
+        linkedin, fallback, searchedCompanies, profile, pages,
       }))
     } catch { /* localStorage 不可用/已滿則略過 */ }
   }, [done, jobs, companyJobs, skillGap, queries, sources, linkedin, fallback,
-      searchedCompanies, profile, text, companies])
+      searchedCompanies, profile, text, companies, pages])
 
   function addCompany(name: string) {
     const n = name.trim()
@@ -166,6 +168,7 @@ export function JobSearchView(
     } else {
       setError("請先貼上履歷文字，或上傳履歷檔案"); return
     }
+    form.append("pages", String(pages))
     go(form)
   }
   function onFile(e: ChangeEvent<HTMLInputElement>) {
@@ -229,6 +232,24 @@ export function JobSearchView(
             />
           </div>
           <p className="text-xs text-slate-400 mt-1">這些公司在 104 / LinkedIn / Cake 與官網 careers 的開缺，會列在下方「指定公司的職缺」獨立區塊。</p>
+        </div>
+
+        <div className="mt-4 flex items-center gap-2 text-sm">
+          <label htmlFor="pages-select" className="font-medium text-slate-700 flex items-center gap-1.5">
+            <Layers className="w-4 h-4 text-slate-400" />每個來源抓幾頁
+          </label>
+          <select
+            id="pages-select"
+            value={pages}
+            onChange={(e) => setPages(Number(e.target.value))}
+            disabled={busy}
+            className="border border-slate-300 rounded-lg px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-50"
+          >
+            {[1, 2, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>{n} 頁</option>
+            ))}
+          </select>
+          <span className="text-xs text-slate-400">頁數越多找得越全，但搜尋與評分也越久（預設 2 頁）。</span>
         </div>
 
         <div className="flex flex-wrap gap-2 mt-4 items-center">

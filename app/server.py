@@ -189,8 +189,13 @@ def jobs_auto(
     file: UploadFile | None = File(default=None),
     resume_text: str = Form(default=""),
     companies: str = Form(default=""),
+    pages: int = Form(default=2),
 ):
-    """履歷 → 自動找職缺：解析履歷 → 推導關鍵字 → 搜尋多站 →（選填）併入指定公司的開缺 → 依履歷排序。"""
+    """履歷 → 自動找職缺：解析履歷 → 推導關鍵字 → 搜尋多站 →（選填）併入指定公司的開缺 → 依履歷排序。
+
+    pages：每個來源抓幾頁（使用者可在前端調整，預設 2、夾在 1–5）。
+    """
+    pages = max(1, min(5, pages))
     if file is not None:
         data = file.file.read()
         text = extract_text(data, file.filename or "resume.txt")
@@ -220,7 +225,7 @@ def jobs_auto(
             resume_jobs = []
             for q in queries[:3]:
                 yield _sse({"type": "progress", "step": "search", "message": f"搜尋「{q}」中…"})
-                for res in search_all(q, limit=15):
+                for res in search_all(q, limit=15, pages=pages):
                     yield _sse({"type": "source", "source": res.source,
                                 "count": len(res.jobs), "blocked": res.blocked})
                     for j in res.jobs:

@@ -43,5 +43,6 @@ export {
   ChevronLeft,
   ChevronRight,
   Trash2,
+  Layers,
   X,
 } from "lucide-react"

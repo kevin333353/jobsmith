@@ -226,7 +226,7 @@ def test_jobs_auto_falls_back_when_all_blocked(monkeypatch):
     monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["AI 工程師"])
     # 所有來源都被擋 → 無 job
     monkeypatch.setattr(server_mod, "search_all",
-                        lambda q, limit=10: [SearchResult(source="104", blocked=True)])
+                        lambda q, limit=10, pages=1: [SearchResult(source="104", blocked=True)])
     captured = {}
 
     def fake_rank(profile, jobs, top_k=12):
@@ -251,7 +251,7 @@ def test_jobs_auto_emits_profile_event(monkeypatch):
                                              skills=["Python"]))
     monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["AI 工程師"])
     monkeypatch.setattr(server_mod, "search_all",
-                        lambda q, limit=10: [SearchResult(source="104", jobs=[
+                        lambda q, limit=10, pages=1: [SearchResult(source="104", jobs=[
                             JobPosting(source="104", title="AI", company="C", url="u1")])])
     monkeypatch.setattr(server_mod, "rank_jobs",
                         lambda profile, jobs, top_k=12: [JobMatch(job=jobs[0], fit_score=80)])
@@ -374,7 +374,7 @@ def test_jobs_auto_streams_ranked_jobs(monkeypatch):
                         lambda text: Profile(name="王", summary="後端", raw_text=text))
     monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["AI 工程師"])
     monkeypatch.setattr(server_mod, "search_all",
-                        lambda q, limit=10: [SearchResult(source="104", jobs=[
+                        lambda q, limit=10, pages=1: [SearchResult(source="104", jobs=[
                             JobPosting(source="104", title="AI 工程師", company="某公司", url="u1")])])
     monkeypatch.setattr(server_mod, "rank_jobs",
                         lambda profile, jobs, top_k=12: [JobMatch(job=jobs[0], fit_score=88, reason="合適")])
@@ -398,6 +398,29 @@ def test_jobs_auto_empty_returns_error():
     assert any(e["type"] == "error" for e in events)
 
 
+def test_jobs_auto_passes_pages_to_search(monkeypatch):
+    """前端傳的 pages 應下傳給 search_all；未帶時預設 2、超界夾在 1–5。"""
+    from app.models import Profile, SearchResult
+    monkeypatch.setattr(server_mod, "structure_profile",
+                        lambda text: Profile(name="王", summary="後端", raw_text=text))
+    monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["AI"])
+    monkeypatch.setattr(server_mod, "rank_jobs", lambda profile, jobs, top_k=None: [])
+    captured = {}
+
+    def fake_search(q, limit=15, pages=1):
+        captured["pages"] = pages
+        return [SearchResult(source="104", jobs=[])]
+    monkeypatch.setattr(server_mod, "search_all", fake_search)
+    client = TestClient(server_mod.app)
+
+    client.post("/api/jobs/auto", data={"resume_text": "x"})
+    assert captured["pages"] == 2                       # 預設
+    client.post("/api/jobs/auto", data={"resume_text": "x", "pages": "9"})
+    assert captured["pages"] == 5                       # 上界夾住
+    client.post("/api/jobs/auto", data={"resume_text": "x", "pages": "0"})
+    assert captured["pages"] == 1                       # 下界夾住
+
+
 def test_jobs_auto_lists_company_jobs_in_separate_event(monkeypatch):
     """指定公司名單時，公司開缺走獨立的 company_jobs 事件、與 AI 推薦分開排序。"""
     from app.models import Profile, JobPosting, JobMatch, SearchResult
@@ -405,7 +428,7 @@ def test_jobs_auto_lists_company_jobs_in_separate_event(monkeypatch):
                         lambda text: Profile(name="王", summary="後端", raw_text=text))
     monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["AI 工程師"])
     monkeypatch.setattr(server_mod, "search_all",
-                        lambda q, limit=15: [SearchResult(source="104", jobs=[
+                        lambda q, limit=15, pages=1: [SearchResult(source="104", jobs=[
                             JobPosting(source="104", title="AI 工程師", company="某公司", url="u1")])])
     captured = {}
 
@@ -435,7 +458,7 @@ def test_jobs_auto_without_companies_skips_company_lookup(monkeypatch):
                         lambda text: Profile(name="王", summary="後端", raw_text=text))
     monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["AI 工程師"])
     monkeypatch.setattr(server_mod, "search_all",
-                        lambda q, limit=15: [SearchResult(source="104", jobs=[
+                        lambda q, limit=15, pages=1: [SearchResult(source="104", jobs=[
                             JobPosting(source="104", title="AI 工程師", company="某公司", url="u1")])])
     called = {"n": 0}
 

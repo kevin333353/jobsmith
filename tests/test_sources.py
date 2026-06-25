@@ -31,6 +31,47 @@ def test_source_104_parses(monkeypatch):
     assert "Python" in j.snippet and "[[[" not in j.snippet
 
 
+def test_source_104_paginates_and_dedups(monkeypatch):
+    # pages=2：抓兩頁、合併、跨頁去重（job/1 在兩頁都出現，只計一次）
+    pages_data = {
+        "1": {"data": [
+            {"jobName": "A", "custName": "C", "link": {"job": "https://x/1"}},
+            {"jobName": "B", "custName": "C", "link": {"job": "https://x/2"}},
+        ]},
+        "2": {"data": [
+            {"jobName": "A", "custName": "C", "link": {"job": "https://x/1"}},  # 重複
+            {"jobName": "D", "custName": "C", "link": {"job": "https://x/3"}},
+        ]},
+    }
+    calls = []
+
+    def fake_get(url, **k):
+        # 從 URL 取出 page=N
+        page = url.split("page=")[1].split("&")[0]
+        calls.append(page)
+        return FakeResp(json_data=pages_data[page])
+
+    monkeypatch.setattr(source_104, "http_get", fake_get)
+    res = source_104.search("AI", limit=15, pages=2)
+    assert calls == ["1", "2"]                       # 真的抓了兩頁
+    urls = [j.url for j in res.jobs]
+    assert urls == ["https://x/1", "https://x/2", "https://x/3"]  # 去重後 3 筆
+
+
+def test_source_104_pages_default_one(monkeypatch):
+    # 預設 pages=1 只抓第一頁（維持舊行為）
+    calls = []
+
+    def fake_get(url, **k):
+        calls.append(url)
+        return FakeResp(json_data={"data": [{"jobName": "A", "custName": "C",
+                                             "link": {"job": "https://x/1"}}]})
+
+    monkeypatch.setattr(source_104, "http_get", fake_get)
+    source_104.search("AI")
+    assert len(calls) == 1
+
+
 def test_source_104_salary_from_low_high(monkeypatch):
     # 真實 104 回傳：salaryDesc 不存在，數值在 salaryLow/salaryHigh + 型態碼 s10
     payload = {"data": [
@@ -181,11 +222,26 @@ def test_registry_search_all_aggregates(monkeypatch):
     from app.sources import registry
     from app.models import SearchResult
     monkeypatch.setattr(registry, "SEARCHABLE", {
-        "104": lambda kw, limit=15: SearchResult(source="104"),
-        "yourator": lambda kw, limit=15: SearchResult(source="yourator"),
+        "104": lambda kw, limit=15, pages=1: SearchResult(source="104"),
+        "yourator": lambda kw, limit=15, pages=1: SearchResult(source="yourator"),
     })
     results = registry.search_all("AI")
     assert [r.source for r in results] == ["104", "yourator"]
+
+
+def test_registry_search_all_passes_pages(monkeypatch):
+    """search_all 應把 pages 下傳給各來源。"""
+    from app.sources import registry
+    from app.models import SearchResult
+    seen = {}
+
+    def fake(kw, limit=15, pages=1):
+        seen["pages"] = pages
+        return SearchResult(source="104")
+
+    monkeypatch.setattr(registry, "SEARCHABLE", {"104": fake})
+    registry.search_all("AI", pages=3)
+    assert seen["pages"] == 3
 
 
 def test_linkedin_search_url():
