@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import type { MouseEvent } from "react"
-import type { UserProfile, JobMatch } from "../types"
+import type { UserProfile, JobMatch, SkillGapReport } from "../types"
 import { resolveJd } from "../lib/resolveJd"
 import { JobList } from "../components/jobs/JobList"
 import { Card } from "../ui/Card"
@@ -10,6 +10,10 @@ import { Search, Trash2, ArrowLeft, Building2, Target } from "../ui/icons"
 
 interface SearchSummary {
   id: number; created_at: string; label: string; ai_count: number; company_count: number
+}
+interface SearchDetail {
+  id: number; label: string; created_at: string; profile?: UserProfile | null;
+  payload: { jobs?: JobMatch[]; companyJobs?: JobMatch[]; skillGap?: SkillGapReport }
 }
 
 function fmtDate(iso: string) {
@@ -22,13 +26,15 @@ export function SearchHistoryView(
   { active: boolean; onPick: (jd: string, profile?: UserProfile | null) => void },
 ) {
   const [list, setList] = useState<SearchSummary[]>([])
-  const [detail, setDetail] = useState<any>(null)
+  const [detail, setDetail] = useState<SearchDetail | null>(null)
   const [busy, setBusy] = useState(false)
 
   async function refresh() {
     try { setList((await (await fetch("/api/searches")).json()).searches || []) }
     catch { /* 靜默 */ }
   }
+  // 切到此分頁（active）時載入清單；資料載入是 effect 的正當用途。
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (active) refresh() }, [active])
 
   async function open(id: number) {

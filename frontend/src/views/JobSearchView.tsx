@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react"
-import type { JobMatch, UserProfile, SkillGapReport } from "../types"
+import type { JobMatch, UserProfile, SkillGapReport, JobsAutoEvent } from "../types"
 import { readSSE } from "../sse"
 import { SAMPLE_RESUME } from "../sampleResume"
 import { resolveJd } from "../lib/resolveJd"
-import { JobList, SRC_LABEL } from "../components/jobs/JobList"
+import { JobList } from "../components/jobs/JobList"
+import { SRC_LABEL } from "../lib/sources"
 import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
@@ -15,6 +16,12 @@ import { Search, Upload, Loader2, ExternalLink, AlertTriangle, CheckCircle2, XCi
 const SNAP_KEY = "copilot.jobsearch.v1"  // 上次搜尋結果快取（重新整理/重開沿用）
 
 type SourceStat = { source: string; count: number; blocked: boolean }
+// 串流累積容器（完成後整包存進搜尋紀錄）；state 更新非同步，存檔讀這裡的即時值。
+type SearchAcc = {
+  jobs: JobMatch[]; companyJobs: JobMatch[]; skillGap: SkillGapReport | null
+  queries: string[]; sources: SourceStat[]; linkedin: string; fallback: boolean
+  profile: UserProfile | null
+}
 const sortByFit = (arr: JobMatch[]) => [...arr].sort((a, b) => b.fit_score - a.fit_score)
 
 function mergeSource(arr: SourceStat[], ev: { source: string; count: number; blocked: boolean }): SourceStat[] {
@@ -51,12 +58,15 @@ export function JobSearchView(
   const [searchedCompanies, setSearchedCompanies] = useState<string[]>([])
   const [pages, setPages] = useState(2)  // 每個來源抓幾頁（越多越全、但越慢）
 
-  // 還原上次搜尋結果：重新整理 / 重開不必重找。
+  const abortRef = useRef<AbortController | null>(null)  // 取消上一個未完成的搜尋
+
+  // 還原上次搜尋結果：重新整理 / 重開不必重找（僅開啟時還原一次，是 effect 正當用途）。
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SNAP_KEY)
       if (!raw) return
       const s = JSON.parse(raw)
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (typeof s.text === "string") setText(s.text)
       if (Array.isArray(s.companies)) setCompanies(s.companies)
       if (Array.isArray(s.jobs)) setJobs(s.jobs)
@@ -71,7 +81,9 @@ export function JobSearchView(
       if (s.profile) { setProfile(s.profile as UserProfile); onProfile?.(s.profile as UserProfile) }
       if (Array.isArray(s.jobs) && s.jobs.length) setDone(true)
     } catch { /* 忽略毀損快取 */ }
-  }, [])  // 僅開啟時還原一次
+    // 僅開啟時還原一次；onProfile 為穩定的 setState，不需列入依賴。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (!done) return
@@ -101,7 +113,7 @@ export function JobSearchView(
     }
   }
 
-  async function saveSearch(acc: any, cs: string[]) {
+  async function saveSearch(acc: SearchAcc, cs: string[]) {
     if (!acc.jobs.length && !acc.companyJobs.length) return
     const name = (acc.profile && (acc.profile as Record<string, unknown>).name) || ""
     const label = [name || "搜尋", acc.queries[0] || ""].filter(Boolean).join(" · ")
@@ -127,14 +139,18 @@ export function JobSearchView(
     if (cs.length) form.append("companies", cs.join(","))
     setSearchedCompanies(cs)
 
+    abortRef.current?.abort()  // 取消上一個還沒跑完的搜尋，避免兩條串流交錯進同一個 acc
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+
     setBusy(true); setDone(false); setError(""); setJobs([]); setCompanyJobs([]); setQueries([]); setSources([])
     setLinkedin(""); setProfile(null); setBlockedNote(""); setFallback(false); setSkillGap(null); setRankTotal(0)
     setStatus("上傳中…")
     // 串流累積（供完成後存檔；state 更新非同步，存檔讀這裡的即時值）。
-    const acc: any = { jobs: [], companyJobs: [], skillGap: null, queries: [], sources: [], linkedin: "", fallback: false, profile: null }
+    const acc: SearchAcc = { jobs: [], companyJobs: [], skillGap: null, queries: [], sources: [], linkedin: "", fallback: false, profile: null }
     try {
-      const resp = await fetch("/api/jobs/auto", { method: "POST", body: form })
-      await readSSE(resp, (ev) => {
+      const resp = await fetch("/api/jobs/auto", { method: "POST", body: form, signal: ctrl.signal })
+      await readSSE(resp, (ev: JobsAutoEvent) => {
         if (ev.type === "progress") setStatus(ev.message)
         else if (ev.type === "profile") { acc.profile = ev.data; setProfile(ev.data as UserProfile); onProfile?.(ev.data as UserProfile) }
         else if (ev.type === "queries") { acc.queries = ev.queries; setQueries(ev.queries) }
@@ -152,10 +168,11 @@ export function JobSearchView(
         else if (ev.type === "done") setDone(true)
       })
       await saveSearch(acc, cs)  // 自動存進「搜尋紀錄」
-    } catch {
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") return  // 被新搜尋取消 → 靜默
       setError("連線發生問題，請確認伺服器是否啟動。")
     } finally {
-      setBusy(false); setStatus("")
+      if (abortRef.current === ctrl) { setBusy(false); setStatus("") }  // 僅當前搜尋才收尾
     }
   }
 

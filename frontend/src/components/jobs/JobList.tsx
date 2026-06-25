@@ -1,15 +1,12 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { JobMatch } from "../../types"
+import { SRC_LABEL } from "../../lib/sources"
 import { Card } from "../../ui/Card"
 import { Button } from "../../ui/Button"
 import { Badge } from "../../ui/Badge"
 import { Sparkles, ExternalLink, ChevronLeft, ChevronRight } from "../../ui/icons"
 
 const PAGE_SIZE = 8
-
-export const SRC_LABEL: Record<string, string> = {
-  "104": "104", yourator: "Yourator", linkedin: "LinkedIn", cake: "Cake", careers: "官網", sample: "範例",
-}
 
 function fitGradient(s: number) {
   return s >= 80 ? "from-emerald-500 to-emerald-600"
@@ -64,11 +61,18 @@ export function JobList({ matches, onPick }:
   { matches: JobMatch[]; onPick: (m: JobMatch) => void | Promise<void> }) {
   const [page, setPage] = useState(1)
   const [pendingUrl, setPendingUrl] = useState("")
-  useEffect(() => { setPage(1) }, [matches])  // 新一輪結果回到第 1 頁
+  // 新一輪結果（matches 參考改變）→ 在 render 期回到第 1 頁（React 官方「prop 改變時
+  // 調整 state」做法：用 state 記錄上一批比對，免 effect、不讀寫 ref）。
+  const [prevMatches, setPrevMatches] = useState(matches)
+  if (prevMatches !== matches) {
+    setPrevMatches(matches)
+    setPage(1)
+  }
   const totalPages = Math.max(1, Math.ceil(matches.length / PAGE_SIZE))
   const cur = Math.min(page, totalPages)
 
   async function handle(m: JobMatch) {
+    if (pendingUrl) return  // 已有一張卡在抓 JD/開跑 → 忽略連點，避免同時觸發多條 pipeline
     setPendingUrl(m.job.url)
     try { await onPick(m) } finally { setPendingUrl("") }
   }

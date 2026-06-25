@@ -22,7 +22,9 @@ export function PreferencesView(
 
   // 記憶是非同步載入的：value 由 {} 變成已存偏好時，把欄位同步回填，
   // 否則開「個人化」分頁會看到空白表單（甚至誤存空值蓋掉既有偏好）。
+  // 這是「prop 改變時同步本地草稿」的刻意用法。
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setTitles((value.target_titles || []).join("、"))
     setSeniority(value.seniority || "")
     setTone(value.tone || "")

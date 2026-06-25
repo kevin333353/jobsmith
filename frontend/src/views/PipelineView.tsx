@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import type { PipelineState, Seed, UserProfile, TelemetryEntry, EditablePackage, Preferences } from "../types"
+import type { PipelineState, Seed, UserProfile, TelemetryEntry, EditablePackage, Preferences, PipelineEvent } from "../types"
 import { readSSE } from "../sse"
 import { AgentTrace } from "../components/pipeline/AgentTrace"
 import {
@@ -37,7 +37,7 @@ export function PipelineView(
   const [edited, setEdited] = useState<EditablePackage | null>(null)
   const [wantPrint, setWantPrint] = useState(false)
 
-  function handle(ev: any) {
+  function handle(ev: PipelineEvent) {
     if (ev.type === "start") {
       setThreadId(ev.thread_id); setStatus("執行中…")
     } else if (ev.type === "node") {
@@ -171,13 +171,17 @@ export function PipelineView(
   }
 
   // 列印前先退出編輯模式（編輯值已存在 edited，唯讀檢視仍顯示），避免印出 textarea。
+  // 退出編輯需先 render（textarea→唯讀）再 print，故經由 wantPrint 旗標延一個 render。
   function printDocs() { setEditing(false); setWantPrint(true) }
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (wantPrint) { setWantPrint(false); window.print() }
   }, [wantPrint])
 
-  // 從「自動找職缺」點選某職缺帶 JD + 真實履歷進來 → 自動開跑（投遞包用本人背景）
+  // 從「自動找職缺」點選某職缺帶 JD + 真實履歷進來 → 自動開跑（投遞包用本人背景）。
+  // 由父層的 seed.nonce 觸發（外部訊號），是 effect 的正當用途。
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (seed?.jd) { setJd(seed.jd); run(seed.jd, seed.profile) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed?.nonce])

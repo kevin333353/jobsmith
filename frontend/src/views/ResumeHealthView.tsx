@@ -1,6 +1,6 @@
 import { useState } from "react"
 import type { ChangeEvent } from "react"
-import type { ResumeAssessment, UserProfile } from "../types"
+import type { ResumeAssessment, UserProfile, SSEEvent } from "../types"
 import { readSSE } from "../sse"
 import { SAMPLE_RESUME } from "../sampleResume"
 import { Dashboard } from "../components/Dashboard"
@@ -21,7 +21,7 @@ export function ResumeHealthView({ onProfile }: { onProfile?: (p: UserProfile) =
     setBusy(true); setError(""); setAssessment(null); setStatus("上傳中…")
     try {
       const resp = await fetch("/api/resume/evaluate", { method: "POST", body: form })
-      await readSSE(resp, (ev) => {
+      await readSSE(resp, (ev: SSEEvent) => {
         if (ev.type === "progress") setStatus(ev.message)
         else if (ev.type === "profile") onProfile?.(ev.data as UserProfile)  // 共用真實履歷給投遞包工作台
         else if (ev.type === "assessment") setAssessment(ev.data as ResumeAssessment)

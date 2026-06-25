@@ -80,6 +80,34 @@ export interface Preferences {
 export interface SkillCount { skill: string; count: number }
 export interface SkillGapReport { top_demand: SkillCount[]; your_gaps: SkillCount[]; have: string[] }
 
+// ---- SSE 事件型別（取代各 view 的 any；對應後端 app/server.py 的串流）----
+// /api/jobs/auto：自動找職缺
+export type JobsAutoEvent =
+  | { type: "start" }
+  | { type: "progress"; step: string; message: string }
+  | { type: "profile"; data: UserProfile }
+  | { type: "queries"; queries: string[] }
+  | { type: "source"; source: string; count: number; blocked: boolean }
+  | { type: "all_blocked"; message: string }
+  | { type: "rank_start"; total: number; fallback: boolean }
+  | { type: "ranked_batch"; data: JobMatch[] }
+  | { type: "company_jobs"; data: JobMatch[] }
+  | { type: "skill_gap"; data: SkillGapReport }
+  | { type: "linkedin"; url: string }
+  | { type: "error"; message: string }
+  | { type: "done" }
+
+// /api/run 與 /api/resume：投遞包多 agent pipeline
+export type PipelineEvent =
+  | { type: "start"; thread_id: string }
+  | { type: "node"; node: string; data?: Partial<PipelineState> }
+  | { type: "node_error"; node: string; message: string }
+  | { type: "profile_warning"; message: string }
+  | ({ type: "telemetry" } & TelemetryEntry)
+  | { type: "interrupt"; thread_id: string }
+  | { type: "error"; message: string }
+  | { type: "done" }
+
 // 多輪面試模擬（對應後端 app/agents/interview_sim.py）
 export interface InterviewQuestion { category: string; question: string }
 export interface AnswerFeedback {

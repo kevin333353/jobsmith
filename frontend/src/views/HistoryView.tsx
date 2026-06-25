@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import type { MouseEvent } from "react"
-import type { UserProfile } from "../types"
+import type { UserProfile, PipelineState } from "../types"
 import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
@@ -13,6 +13,9 @@ import { Archive, Trash2, ArrowLeft, FileDown, Printer, Workflow } from "../ui/i
 interface PkgSummary {
   id: number; created_at: string; job_title: string; company: string; match_score: number; approved: number
 }
+interface PackageDetail {
+  id: number; package: PipelineState; jd_text?: string; profile?: UserProfile | null
+}
 
 function fmtDate(iso: string) {
   try { return new Date(iso).toLocaleString("zh-TW", { dateStyle: "medium", timeStyle: "short" }) }
@@ -24,7 +27,7 @@ export function HistoryView(
   { active: boolean; onReopen: (jd: string, profile?: UserProfile | null) => void },
 ) {
   const [list, setList] = useState<PkgSummary[]>([])
-  const [detail, setDetail] = useState<any>(null)
+  const [detail, setDetail] = useState<PackageDetail | null>(null)
   const [busy, setBusy] = useState(false)
 
   async function refresh() {
@@ -33,6 +36,8 @@ export function HistoryView(
       setList(d.packages || [])
     } catch { /* 靜默 */ }
   }
+  // 切到此分頁（active）時載入清單；資料載入是 effect 的正當用途。
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (active) refresh() }, [active])
 
   async function open(id: number) {
@@ -48,7 +53,7 @@ export function HistoryView(
     refresh()
   }
 
-  async function downloadDocx(pkg: any) {
+  async function downloadDocx(pkg: PipelineState) {
     const r = pkg.tailored_resume, c = pkg.cover_letter, k = pkg.interview_kit
     const body = {
       job_title: pkg.parsed_job?.title || "求職投遞包",
