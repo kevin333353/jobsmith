@@ -67,12 +67,22 @@ function compact(n: number): string {
   return String(n)
 }
 
+// 耗時人性化顯示：避免「149.3s」這種看不出多久、又會撐破框的原始秒數。
+// <60 秒 → 「48 秒」；≥60 秒 → 「2 分 29 秒」。
+function fmtDuration(ms: number): string {
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s} 秒`
+  const m = Math.floor(s / 60)
+  const rem = s % 60
+  return rem ? `${m} 分 ${rem} 秒` : `${m} 分`
+}
+
 function NodeBadges({ t }: { t?: TelemetryEntry }) {
   if (!t) return null
   const tokens = (t.input_tokens || 0) + (t.output_tokens || 0)
   const items: [ComponentType<{ className?: string }>, string][] = []
   if (tokens > 0) items.push([Cpu, compact(tokens)])
-  if (t.latency_ms > 0) items.push([Timer, `${(t.latency_ms / 1000).toFixed(1)}s`])
+  if (t.latency_ms > 0) items.push([Timer, fmtDuration(t.latency_ms)])
   if (!items.length) return null
   return (
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 mt-1 text-[11px] text-slate-400">
@@ -116,11 +126,12 @@ function NodeRow(
 }
 
 function Stat(
-  { icon: Icon, label, value }:
-  { icon: ComponentType<{ className?: string }>; label: string; value: string },
+  { icon: Icon, label, value, hint }:
+  { icon: ComponentType<{ className?: string }>; label: string; value: string; hint?: string },
 ) {
   return (
-    <div className="flex items-center gap-2 bg-white/5 rounded-lg px-2.5 py-1.5 min-w-0">
+    <div title={hint}
+      className={`flex items-center gap-2 bg-white/5 rounded-lg px-2.5 py-1.5 min-w-0 ${hint ? "cursor-help" : ""}`}>
       <Icon className="w-3.5 h-3.5 text-brand-300 shrink-0" />
       <div className="leading-tight min-w-0">
         <div className="text-sm font-semibold text-white truncate">{value}</div>
@@ -192,8 +203,9 @@ export function AgentTrace(
       {hasTelem && (
         <div className="grid grid-cols-3 gap-2 mb-4">
           <Stat icon={Gauge} label="agents" value={String(byNode.size)} />
-          <Stat icon={Cpu} label="tokens" value={compact(totals.tokens)} />
-          <Stat icon={Timer} label="時間" value={`${(totals.ms / 1000).toFixed(1)}s`} />
+          <Stat icon={Cpu} label="tokens" value={compact(totals.tokens)}
+            hint="含快取讀取，實際消耗（新輸入＋輸出）遠低於此數字，訂閱用戶可安心使用" />
+          <Stat icon={Timer} label="時間" value={fmtDuration(totals.ms)} />
         </div>
       )}
 

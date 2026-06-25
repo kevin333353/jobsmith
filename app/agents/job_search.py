@@ -1,8 +1,8 @@
 """職缺探索 agent：從履歷推導搜尋關鍵字、對搜到的職缺依履歷排序。"""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.llm import get_llm
-from app.models import JobMatch, JobPosting, Profile
+from app.models import JobMatch, JobPosting, Profile, coerce_str, coerce_str_list
 
 QUERY_SYSTEM = (
     "你是台灣求職顧問。根據求職者背景，產出 1-3 個最適合在台灣求職網站（104/Cake/Yourator）"
@@ -21,6 +21,12 @@ RANK_SYSTEM = (
 class SearchQueries(BaseModel):
     queries: list[str] = Field(default_factory=list, description="1-3 個搜尋關鍵字詞")
 
+    # codex/gpt 可能把 queries 回成 null 或單一字串，先收斂避免結構化解析失敗。
+    @field_validator("queries", mode="before")
+    @classmethod
+    def _coerce_queries(cls, v):
+        return coerce_str_list(v)
+
 
 class _RankItem(BaseModel):
     index: int = Field(description="對應職缺清單的索引")
@@ -29,9 +35,24 @@ class _RankItem(BaseModel):
     gaps: list[str] = Field(default_factory=list)
     reason: str = ""
 
+    @field_validator("matched", "gaps", mode="before")
+    @classmethod
+    def _coerce_lists(cls, v):
+        return coerce_str_list(v)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _coerce_reason(cls, v):
+        return coerce_str(v)
+
 
 class _RankResult(BaseModel):
     rankings: list[_RankItem] = Field(default_factory=list)
+
+    @field_validator("rankings", mode="before")
+    @classmethod
+    def _coerce_rankings(cls, v):
+        return v if v is not None else []
 
 
 def _profile_brief(profile: Profile) -> str:

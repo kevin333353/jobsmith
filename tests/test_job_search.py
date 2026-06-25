@@ -3,6 +3,20 @@ from app.agents import job_search as mod
 from tests.conftest import FakeLLM
 
 
+def test_search_queries_tolerates_codex_shapes():
+    # codex/gpt 可能把 queries 回 null 或單一字串，要收斂而非結構化解析失敗。
+    assert mod.SearchQueries(queries=None).queries == []
+    assert mod.SearchQueries(queries="AI 工程師").queries == ["AI 工程師"]
+
+
+def test_rank_item_tolerates_null_lists():
+    # matched/gaps 被回成 null、reason 被回成陣列時，要收斂而非報錯（否則整批排序被丟掉）。
+    it = mod._RankItem(index=1, fit_score=80, matched=None, gaps=None, reason=["很合適", "技能吻合"])
+    assert it.matched == [] and it.gaps == []
+    assert it.reason == "很合適、技能吻合"
+    assert mod._RankResult(rankings=None).rankings == []
+
+
 def test_derive_queries(monkeypatch):
     canned = mod.SearchQueries(queries=["AI 工程師", "Python 後端"])
     monkeypatch.setattr(mod, "get_llm", lambda tier, **k: FakeLLM(canned))

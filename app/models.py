@@ -1,19 +1,63 @@
 """共享領域模型（強型別、可被 with_structured_output 使用）。"""
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def coerce_str(v):
+    """LLM 字串欄位防呆：null → ""；陣列 → 頓號串接。
+
+    不同後端對同一 schema 的輸出形狀不一（claude 多半守規矩；codex/gpt 常把單一字串欄位
+    回成 null 或 list，例如 education 給多筆學歷）。先收斂再驗證，避免結構化解析失敗。
+    """
+    if v is None:
+        return ""
+    if isinstance(v, (list, tuple)):
+        return "、".join(str(x).strip() for x in v if x is not None and str(x).strip())
+    return v
+
+
+def coerce_str_list(v):
+    """LLM 字串清單欄位防呆：null → []；單一字串 → [字串]。"""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v] if v.strip() else []
+    return v
 
 
 class Profile(BaseModel):
     """使用者求職背景。"""
-    name: str
-    summary: str = Field(description="一句話自我介紹/定位")
+    name: str = ""
+    summary: str = Field(default="", description="一句話自我介紹/定位")
     skills: list[str] = Field(default_factory=list)
     experiences: list[str] = Field(default_factory=list, description="經歷條列")
-    education: str | None = None
+    education: str = ""
     years_experience: float | None = None
     preferred_roles: list[str] = Field(default_factory=list)
-    raw_text: str = Field(description="原始貼上的履歷文字")
+    raw_text: str = Field(default="", description="原始貼上的履歷文字")
+
+    @field_validator("name", "summary", "education", "raw_text", mode="before")
+    @classmethod
+    def _coerce_strs(cls, v):
+        return coerce_str(v)
+
+    @field_validator("skills", "experiences", "preferred_roles", mode="before")
+    @classmethod
+    def _coerce_lists(cls, v):
+        return coerce_str_list(v)
+
+    @field_validator("years_experience", mode="before")
+    @classmethod
+    def _coerce_years(cls, v):
+        # 年資可能被回成 "約 5 年" 這種字串：抽第一個數字，抽不到就 None（而非驗證失敗）。
+        if v is None or v == "":
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        m = re.search(r"\d+(?:\.\d+)?", str(v))
+        return float(m.group()) if m else None
 
 
 class ParsedJob(BaseModel):

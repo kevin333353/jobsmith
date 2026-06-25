@@ -10,6 +10,25 @@ def test_profile_minimal_valid():
     assert p.years_experience is None
 
 
+def test_profile_tolerates_model_output_variance():
+    # 不同後端（codex/gpt）解析履歷時，name 常回 null、education 回陣列、字串欄位回 null、
+    # list 欄位回單一字串、years 回「約 5 年」這種字串——schema 要收斂而非結構化解析失敗。
+    p = Profile(
+        name=None,
+        summary=None,
+        skills=None,
+        experiences="單一字串經歷",
+        education=["台大資工", "交大電機"],
+        years_experience="約 5 年",
+        raw_text=None,
+    )
+    assert p.name == "" and p.summary == "" and p.raw_text == ""
+    assert p.skills == []
+    assert p.experiences == ["單一字串經歷"]
+    assert p.education == "台大資工、交大電機"
+    assert p.years_experience == 5.0
+
+
 def test_parsed_job_requires_title_and_company():
     with pytest.raises(ValidationError):
         ParsedJob(title="AI 工程師")  # 缺 company

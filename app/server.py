@@ -652,8 +652,12 @@ def _resolve_profile(body: RunBody) -> Profile:
     """優先用使用者真實履歷；缺省才退回 demo profile。"""
     if body.profile:
         data = dict(body.profile)
-        data.setdefault("raw_text", "")  # raw_text 為必填，前端事件已排除，補空字串
-        return Profile(**data)
+        p = Profile(**data)
+        # Profile 已放寬以容忍模型輸出（name/summary 可空）；但若前端傳來的 profile 連
+        # 姓名與定位都沒有，視為不可用 → 回 400 友善訊息，而非拿空殼去跑 pipeline。
+        if not (p.name.strip() or p.summary.strip()):
+            raise ValueError("履歷缺少姓名與定位，無法產生投遞包，請重新上傳履歷。")
+        return p
     profile_path = body.profile_path
     if not Path(profile_path).is_absolute():
         profile_path = str(_ROOT / profile_path)
