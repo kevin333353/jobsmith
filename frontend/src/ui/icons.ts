@@ -31,6 +31,7 @@ export {
   Target,
   Wand2,
   ClipboardList,
+  ListChecks,
   Network,
   Gauge,
   Compass,

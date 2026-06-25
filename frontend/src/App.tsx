@@ -10,6 +10,7 @@ import { PreferencesView } from "./views/PreferencesView"
 import { BackendSelector } from "./components/BackendSelector"
 import { GithubStar } from "./components/GithubStar"
 import { Onboarding } from "./components/Onboarding"
+import { FirstRunGuide } from "./components/FirstRunGuide"
 import {
   loadCandidateProfiles, makeCandidateProfile, profileDisplayName,
   saveCandidateProfiles, upsertCandidateProfile,
@@ -30,9 +31,13 @@ const NAV: NavItem<Tab>[] = [
   { id: "resume", label: "履歷健檢", icon: FileChartColumn },
 ]
 const FOOTER: NavItem<Tab>[] = [{ id: "settings", label: "個人化", icon: Settings2 }]
+const BACKEND_CONFIRMED_KEY = "copilot.backend.confirmed"
+const GUIDE_DISMISSED_KEY = "copilot.firstRunGuide.dismissed"
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("search")
+  const [backendConfirmed, setBackendConfirmed] = useState(
+    () => localStorage.getItem(BACKEND_CONFIRMED_KEY) === "1")
   const [seed, setSeed] = useState<Seed | null>(null)
   const [interviewSeed, setInterviewSeed] = useState<Seed | null>(null)
   // 從「我的投遞包」點進行中的那筆 → 工作台接回該背景產生看即時進度。
@@ -45,9 +50,10 @@ export default function App() {
   const [profiles, setProfiles] = useState<CandidateProfile[]>(() => loadCandidateProfiles())
   const [preferences, setPreferences] = useState<Preferences>({})
   const [privacyVersion, setPrivacyVersion] = useState(0)
+  const [guideDismissed, setGuideDismissed] = useState(
+    () => localStorage.getItem(GUIDE_DISMISSED_KEY) === "1")
   // 開場引導：第一次使用先選 AI 後端並測試連線；確認過後記在 localStorage 不再跳出。
-  const [showOnboard, setShowOnboard] = useState(
-    () => localStorage.getItem("copilot.backend.confirmed") !== "1")
+  const [showOnboard, setShowOnboard] = useState(() => !backendConfirmed)
 
   // 開 app 載入記憶：偏好自動套用；後端舊版保存的履歷只放進可選 Profile 清單，不設為目前使用。
   useEffect(() => {
@@ -133,8 +139,22 @@ export default function App() {
   }
 
   function finishOnboard() {
-    localStorage.setItem("copilot.backend.confirmed", "1")
+    localStorage.setItem(BACKEND_CONFIRMED_KEY, "1")
+    setBackendConfirmed(true)
     setShowOnboard(false)
+  }
+
+  function skipOnboard() {
+    setShowOnboard(false)
+  }
+
+  function dismissGuide() {
+    localStorage.setItem(GUIDE_DISMISSED_KEY, "1")
+    setGuideDismissed(true)
+  }
+
+  function openBackendOnboarding() {
+    setShowOnboard(true)
   }
 
   function clearPersonalState() {
@@ -144,12 +164,24 @@ export default function App() {
     setSeed(null)
     setInterviewSeed(null)
     setWatch(null)
+    setGuideDismissed(false)
+    localStorage.removeItem(GUIDE_DISMISSED_KEY)
     setPrivacyVersion((v) => v + 1)
   }
 
+  const showFirstRunGuide = !showOnboard && !guideDismissed
+
   return (
     <div className="min-h-screen flex">
-      {showOnboard && <Onboarding onDone={finishOnboard} />}
+      {showOnboard && <Onboarding onDone={finishOnboard} onSkip={skipOnboard} />}
+      {showFirstRunGuide && (
+        <FirstRunGuide
+          backendReady={backendConfirmed}
+          onBackend={openBackendOnboarding}
+          onStart={() => setTab("search")}
+          onDone={dismissGuide}
+        />
+      )}
       <Sidebar items={NAV} active={tab} onSelect={setTab} footer={FOOTER} />
       <div className="flex-1 min-w-0">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">

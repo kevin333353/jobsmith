@@ -19,7 +19,7 @@ const DESC: Record<string, string> = {
   openai: "使用 OpenAI 相容端點，適合 OpenAI、DeepSeek、Groq、OpenRouter、Ollama、LM Studio。",
 }
 
-export function Onboarding({ onDone }: { onDone: () => void }) {
+export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: () => void }) {
   const [options, setOptions] = useState<BackendOption[]>([])
   const [selected, setSelected] = useState("")
   const [byok, setByok] = useState({ base_url: "", api_key: "", model: "" })
@@ -180,7 +180,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <Button onClick={start} loading={starting} disabled={!selected || testing} icon={ArrowRight}>
             開始使用
           </Button>
-          <button type="button" onClick={onDone}
+          <button type="button" onClick={onSkip || onDone}
             className="ml-auto text-sm text-slate-400 hover:text-slate-600 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
             跳過
           </button>
