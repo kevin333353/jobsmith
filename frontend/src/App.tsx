@@ -78,9 +78,13 @@ export default function App() {
       <Sidebar items={NAV} active={tab} onSelect={setTab} footer={FOOTER} />
       <div className="flex-1 min-w-0">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
-          <header className="mb-6 flex items-center justify-end">
-            <BackendSelector />
-          </header>
+          {/* 投遞包工作台要乾淨一頁式：不顯示右上角的執行模式/模型選擇，內容因此往上移。
+              其餘分頁仍保留右上角的後端控制台。 */}
+          {tab !== "pipeline" && (
+            <header className="mb-6 flex items-center justify-end">
+              <BackendSelector />
+            </header>
+          )}
 
           {/* 分頁全掛載只切顯示，保留狀態 */}
           <div className={tab === "search" ? "" : "hidden"}>

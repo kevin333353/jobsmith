@@ -275,24 +275,30 @@ export function PipelineView(
 
             {hasDocs ? (
               <Card className="p-4">
-                <div className="flex flex-wrap gap-1.5 border-b border-slate-200 pb-2 mb-3">
-                  {pages.map((p, i) => (
-                    <button key={p.key} type="button" onClick={() => setPage(i)}
-                      aria-current={i === curPage ? "page" : undefined}
-                      className={`px-3 py-1.5 rounded-lg text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${
-                        i === curPage ? "bg-brand-600 text-white" : "text-slate-600 hover:bg-slate-100"
-                      }`}>{p.label}</button>
-                  ))}
+                {/* 分頁標籤 + 上一頁/下一頁都放頂端，永遠可點，不必往下滑 */}
+                <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2 mb-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    {pages.map((p, i) => (
+                      <button key={p.key} type="button" onClick={() => setPage(i)}
+                        aria-current={i === curPage ? "page" : undefined}
+                        className={`px-3 py-1.5 rounded-lg text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${
+                          i === curPage ? "bg-brand-600 text-white" : "text-slate-600 hover:bg-slate-100"
+                        }`}>{p.label}</button>
+                    ))}
+                  </div>
+                  <div className="ml-auto flex items-center gap-2 shrink-0">
+                    <Button variant="secondary" size="sm" icon={ChevronLeft}
+                      disabled={curPage <= 0} onClick={() => setPage(curPage - 1)}>上一頁</Button>
+                    <span className="text-sm text-slate-500">{curPage + 1} / {pages.length}</span>
+                    <Button variant="secondary" size="sm"
+                      disabled={curPage >= pages.length - 1} onClick={() => setPage(curPage + 1)}>
+                      下一頁<ChevronRight className="w-4 h-4" />
+                    </Button>
+                  </div>
                 </div>
-                <div className="max-h-[62vh] overflow-auto pr-1">{docFor(pages[curPage].key)}</div>
-                <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-200">
-                  <Button variant="secondary" size="sm" icon={ChevronLeft}
-                    disabled={curPage <= 0} onClick={() => setPage(curPage - 1)}>上一頁</Button>
-                  <span className="text-sm text-slate-500">{curPage + 1} / {pages.length}</span>
-                  <Button variant="secondary" size="sm"
-                    disabled={curPage >= pages.length - 1} onClick={() => setPage(curPage + 1)}>
-                    下一頁<ChevronRight className="w-4 h-4" />
-                  </Button>
+                {/* key=當前頁 → 切頁時內容捲軸回到頂端 */}
+                <div key={pages[curPage].key} className="max-h-[68vh] overflow-auto pr-1">
+                  {docFor(pages[curPage].key)}
                 </div>
               </Card>
             ) : phase === "running" ? (

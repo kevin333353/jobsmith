@@ -46,7 +46,7 @@ function Label({ children }: { children: ReactNode }) {
 
 export function MatchCard({ m }: { m: MatchReport }) {
   return (
-    <Section icon={Target} title="② 匹配評分">
+    <Section icon={Target} title="匹配評分">
       <div className="flex items-center gap-5 mb-2">
         <ScoreRing score={m.score} size={96} />
         <div>
@@ -71,7 +71,7 @@ export function MatchCard({ m }: { m: MatchReport }) {
 
 export function CompanyCard({ c }: { c: CompanyBrief }) {
   return (
-    <Section icon={Building2} title={`⑧ 公司情報：${c.company}`}>
+    <Section icon={Building2} title={`公司情報：${c.company}`}>
       {(c.note || c.data_limited) && (
         <p className="text-xs text-amber-600 mb-2 flex items-center gap-1">
           <AlertTriangle className="w-3.5 h-3.5" />{c.note || "公開資料有限，建議自行補查"}
@@ -110,7 +110,7 @@ export function ResumeDoc(
   const blist = blistText.split("\n").filter((b) => b.trim())
   const editable = Boolean(onSummary || onBullets)  // 工作台給 handler → 可編輯；歷史檢視沒給 → 唯讀
   return (
-    <Section icon={FileText} title="③ 客製履歷">
+    <Section icon={FileText} title="客製履歷">
       {/* 螢幕：直接可編輯（不需切換按鈕） */}
       {editable && (
         <div className="no-print space-y-2">
@@ -148,7 +148,7 @@ export function CoverLetterDoc(
   const text = body ?? c.body
   const editable = Boolean(onSubject || onBody)  // 工作台給 handler → 可編輯；歷史檢視沒給 → 唯讀
   return (
-    <Section icon={Mail} title="④ 求職信">
+    <Section icon={Mail} title="求職信">
       {/* 螢幕：直接可編輯 */}
       {editable && (
         <div className="no-print space-y-2">
@@ -181,7 +181,7 @@ function QList({ title, items }: { title: string; items: string[] }) {
 
 export function InterviewKitDoc({ k }: { k: InterviewKit }) {
   return (
-    <Section icon={MessageSquare} title="⑤ 面試準備">
+    <Section icon={MessageSquare} title="面試準備">
       <QList title="技術題" items={k.technical_questions} />
       <QList title="行為題" items={k.behavioral_questions} />
       <QList title="台灣特有題" items={k.taiwan_specific_questions} />
@@ -198,7 +198,7 @@ export function CritiqueCard({ q }: { q: CritiqueReport }) {
   ]
   const tone = (s: number) => (s >= 80 ? "text-emerald-600" : s >= 60 ? "text-amber-500" : "text-rose-600")
   return (
-    <Section icon={ShieldCheck} title="⑥ 品管評審">
+    <Section icon={ShieldCheck} title="品管評審">
       <p className="text-sm mb-3 flex items-center gap-1.5">
         {q.overall_pass
           ? <><CheckCircle2 className="w-4 h-4 text-emerald-600" />整體達標</>

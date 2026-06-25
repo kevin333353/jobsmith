@@ -11,6 +11,7 @@ from fastapi import FastAPI, File, Form, UploadFile, Body
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from langgraph.checkpoint.memory import MemorySaver
 
 from app import settings
 from app.cli import load_profile
@@ -30,10 +31,14 @@ from app.store import searches as _searches
 
 app = FastAPI(title="Jobsmith")
 
-# 單一圖實例：/run 與 /resume 共用同一個 MemorySaver（per-process）。
-GRAPH = build_graph()
 _appdb.init_db()  # 應用層 sqlite（歷史/記憶）
 _history.mark_stale_running_failed()  # 啟動時把上次殘留的「進行中」收尾為 failed
+
+
+def _new_run_graph():
+    """每次背景產生用獨立的 graph + 記憶體 checkpointer，讓多個產生可安全平行
+    （彼此不共用 sqlite 連線；批次模式不需跨程序持久化，故用 MemorySaver）。"""
+    return build_graph(checkpointer=MemorySaver())
 
 _ROOT = Path(__file__).parent.parent  # 專案根（app/ 的上一層）
 _FRONTEND_DIST = _ROOT / "frontend" / "dist"  # Vite 建置產物（產品級前端）
@@ -62,8 +67,9 @@ def _sse(obj: dict) -> str:
 
 # ---- 背景投遞包流程：產生投遞包改成射後不理的背景工作 ----
 # 一按就在「我的投遞包」建紀錄、伺服器背景跑完；瀏覽器重新整理/返回/切分頁都不中斷。
-# 單執行緒佇列逐筆處理，避免多個 graph 同時寫共用的 checkpoint sqlite。
-_RUN_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pipeline")
+# 多個產生可平行（每個用獨立 graph + 記憶體 checkpointer）；超過上限的排隊。
+_MAX_PARALLEL_RUNS = 4
+_RUN_EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_PARALLEL_RUNS, thread_name_prefix="pipeline")
 _RUNS: dict[str, "_Run"] = {}
 _RUNS_LOCK = threading.Lock()
 
@@ -109,10 +115,11 @@ def _jd_title(jd_text: str) -> str:
     return "（產生中）"
 
 
-def _run_pipeline_bg(run: "_Run", initial: dict, config: dict) -> None:
-    """背景執行緒跑整張 graph：逐節點把事件寫進 run 緩衝，跑完更新歷史那筆為 done。"""
+def _run_pipeline_bg(run: "_Run", initial: dict, config: dict, graph) -> None:
+    """背景執行緒跑整張 graph（每個產生用自己的 graph，可平行）：逐節點把事件寫進 run 緩衝，
+    跑完更新歷史那筆為 done。"""
     try:
-        for chunk in GRAPH.stream(initial, config, stream_mode="updates"):
+        for chunk in graph.stream(initial, config, stream_mode="updates"):
             for node, update in chunk.items():
                 if node == "__interrupt__":
                     continue
@@ -123,7 +130,7 @@ def _run_pipeline_bg(run: "_Run", initial: dict, config: dict) -> None:
                 for t in update.get("telemetry") or []:
                     run.emit({"type": "telemetry", **t})
                 run.emit({"type": "node", "node": node, "data": serialize_update(update)})
-        snapshot = GRAPH.get_state(config)
+        snapshot = graph.get_state(config)
         final = serialize_update(snapshot.values)
         _history.update_package_result(run.package_id, final)
         run.emit({"type": "done", "package_id": run.package_id})
@@ -689,7 +696,7 @@ def run(body: RunBody):
     with _RUNS_LOCK:
         _prune_runs()
         _RUNS[thread_id] = run_obj
-    run_obj.future = _RUN_EXECUTOR.submit(_run_pipeline_bg, run_obj, initial, config)
+    run_obj.future = _RUN_EXECUTOR.submit(_run_pipeline_bg, run_obj, initial, config, _new_run_graph())
     return {"thread_id": thread_id, "package_id": pid}
 
 

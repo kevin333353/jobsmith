@@ -86,6 +86,18 @@ def test_run_completes_in_background_and_saves_pending(monkeypatch):
     assert full["status"] == "done" and full["approved"] == 0
 
 
+def test_two_runs_complete_independently(monkeypatch):
+    # 平行：兩個產生各用獨立 graph/checkpointer，都能完成（不互卡、不共用狀態）。
+    _patch_agents(monkeypatch)
+    client = TestClient(server_mod.app)
+    a = client.post("/api/run", json={"jd_text": "JD A"}).json()
+    b = client.post("/api/run", json={"jd_text": "JD B"}).json()
+    server_mod._RUNS[a["thread_id"]].future.result(timeout=20)
+    server_mod._RUNS[b["thread_id"]].future.result(timeout=20)
+    assert server_mod._history.get_package(a["package_id"])["status"] == "done"
+    assert server_mod._history.get_package(b["package_id"])["status"] == "done"
+
+
 def test_run_events_unknown_thread_returns_not_found():
     # 不在記憶體的 thread（已清理/伺服器重啟）→ found=False，前端改從歷史載入。
     client = TestClient(server_mod.app)
