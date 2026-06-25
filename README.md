@@ -6,6 +6,8 @@
 
 Powered by your local **Claude Code / Codex CLI** subscription — no API key required, no API quota consumed.
 
+**English** · [繁體中文](README.zh-TW.md)
+
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-multi--agent-1C3C3C)
@@ -17,16 +19,49 @@ Powered by your local **Claude Code / Codex CLI** subscription — no API key re
 
 > The application UI is in Traditional Chinese, tailored to Taiwan's job-search conventions (104 / Cake / Yourator / LinkedIn).
 
----
+## Quick Start
+
+> **Prerequisites:** Python 3.11+, Node.js 18+, and either a logged-in **Claude Code** (`claude`) / **Codex CLI** (`codex`) on your `PATH`, or an **Anthropic API key**.
+
+```bash
+git clone https://github.com/kevin333353/taiwan-ai-job-copilot.git
+cd taiwan-ai-job-copilot
+
+# One-time setup: virtualenv + backend deps + frontend install & build
+setup.bat            # Windows
+# ./setup.sh         # macOS / Linux / Git Bash
+
+# Launch
+desktop.bat          # native desktop window (recommended)
+# run.bat            # web mode → http://localhost:8000
+```
+
+`setup.bat` / `setup.sh` does everything (venv, `pip install`, `npm install`, `npm run build`) in one go — no need to start the front and back ends separately.
+
+Using the **API-key** backend instead of a CLI subscription? Copy `.env.example` to `.env` and set:
+
+```env
+LLM_BACKEND=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### Running modes
+
+| Mode             | Command                                                        | Notes                                                              |
+| ---------------- | ------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **Desktop app**  | `desktop.bat` (or `python desktop.py`)                        | Native window; first run shows a backend picker + connection test. |
+| **Web**          | `run.bat` (or `python -m uvicorn app.server:app --port 8000`) | Open <http://localhost:8000>.                                     |
+| **CLI (one JD)** | `python -m app.cli data/demo_jobs/ai_engineer.txt`           | Headless single-JD run.                                            |
+
+> Switch the LLM backend from the onboarding screen, the top-right selector, or `LLM_BACKEND` in `.env`.
 
 ## Table of Contents
 
+- [Quick Start](#quick-start)
 - [Features](#features)
+- [LLM Backends](#llm-backends)
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
-- [Getting Started](#getting-started)
-- [Running the App](#running-the-app)
-- [LLM Backends](#llm-backends)
 - [Project Structure](#project-structure)
 - [Testing](#testing)
 - [Roadmap](#roadmap)
@@ -42,6 +77,16 @@ Powered by your local **Claude Code / Codex CLI** subscription — no API key re
 - **Application-package workbench** — a multi-agent pipeline (parse JD → match score → company research → tailored résumé → cover letter → interview kit → critique) with a **human approval gate**. Outputs are editable inline and exportable to Word / PDF, then auto-saved.
 - **Mock interview** — generates questions from the JD and your résumé, with per-answer feedback, scores, and a final summary.
 - **Personalization** — remembers your most recent résumé (no re-upload) and preferences (target titles, tone, skills to emphasize) across sessions and applies them to outputs.
+
+## LLM Backends
+
+| Backend      | Auth                     | Notes                                              |
+| ------------ | ------------------------ | -------------------------------------------------- |
+| `claude_cli` | Claude Code subscription | **Default.** No API key; strips `ANTHROPIC_*` env. |
+| `codex_cli`  | Codex subscription       | Uses your configured Codex model.                  |
+| `anthropic`  | `ANTHROPIC_API_KEY`      | Cloud/deployable; pay-per-use.                     |
+
+CLI subscriptions run **locally** and bind to the logged-in CLI on your machine — a remote server cannot use someone else's local subscription. For a fully hosted deployment, use the `anthropic` backend.
 
 ## Architecture
 
@@ -66,64 +111,12 @@ React SPA (Vite)  ──HTTP/SSE──►  FastAPI
 
 ## Tech Stack
 
-| Layer    | Technologies                                                            |
-| -------- | ----------------------------------------------------------------------- |
+| Layer    | Technologies                                                             |
+| -------- | ------------------------------------------------------------------------ |
 | Backend  | Python, FastAPI, LangGraph, LangChain, Pydantic v2, SQLite, BeautifulSoup |
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS, lucide-react                   |
-| LLM      | Claude Code CLI / Codex CLI (subscription) · Anthropic API (key)         |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS, lucide-react                    |
+| LLM      | Claude Code CLI / Codex CLI (subscription) · Anthropic API (key)          |
 | Desktop  | pywebview (native window over the local server)                          |
-
-## Getting Started
-
-### Prerequisites
-
-- **Python 3.11+**
-- **Node.js 18+** (to build the frontend)
-- One of:
-  - **Claude Code CLI** (`claude`) or **Codex CLI** (`codex`) installed, logged in, and on your `PATH` — recommended, no API key needed; or
-  - an **Anthropic API key**.
-
-### Installation
-
-```bash
-# 1. Backend
-python -m venv .venv
-# Windows: .venv\Scripts\activate   |   macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-
-# 2. Frontend (build the assets the server/desktop window load)
-cd frontend
-npm install
-npm run build
-cd ..
-```
-
-For the API-key backend instead of a CLI subscription, copy `.env.example` to `.env` and set:
-
-```env
-LLM_BACKEND=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-## Running the App
-
-| Mode             | Command                                                            | Notes                                                        |
-| ---------------- | ----------------------------------------------------------------- | ------------------------------------------------------------ |
-| **Desktop app**  | `desktop.bat` (or `python desktop.py`)                            | Native window; first run shows a backend picker + connection test. |
-| **Web**          | `run.bat` (or `python -m uvicorn app.server:app --port 8000`)     | Open <http://localhost:8000>.                                |
-| **CLI (one JD)** | `python -m app.cli data/demo_jobs/ai_engineer.txt`               | Headless single-JD run.                                      |
-
-> Switch the LLM backend from the onboarding screen, the top-right selector, or `LLM_BACKEND` in `.env`.
-
-## LLM Backends
-
-| Backend        | Auth                         | Notes                                            |
-| -------------- | ---------------------------- | ------------------------------------------------ |
-| `claude_cli`   | Claude Code subscription     | **Default.** No API key; strips `ANTHROPIC_*` env. |
-| `codex_cli`    | Codex subscription           | Uses your configured Codex model.                |
-| `anthropic`    | `ANTHROPIC_API_KEY`          | Cloud/deployable; pay-per-use.                   |
-
-CLI subscriptions run **locally** and bind to the logged-in CLI on your machine — a remote server cannot use someone else's local subscription. For a fully hosted deployment, use the `anthropic` backend.
 
 ## Project Structure
 
@@ -147,9 +140,6 @@ data/         # demo profiles/jobs, fallback data
 ```bash
 pytest                # unit/integration suite (live API tests skipped by default)
 pytest -m live        # include tests that call the real API
-```
-
-```bash
 cd frontend && npm run build   # type-check + production build
 ```
 
