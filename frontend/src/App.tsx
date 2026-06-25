@@ -8,6 +8,7 @@ import { HistoryView } from "./views/HistoryView"
 import { SearchHistoryView } from "./views/SearchHistoryView"
 import { PreferencesView } from "./views/PreferencesView"
 import { BackendSelector } from "./components/BackendSelector"
+import { GithubStar } from "./components/GithubStar"
 import { Onboarding } from "./components/Onboarding"
 import { Sidebar } from "./ui/Sidebar"
 import type { NavItem } from "./ui/Sidebar"
@@ -19,8 +20,8 @@ type Tab = "search" | "searches" | "resume" | "pipeline" | "interview" | "histor
 const NAV: NavItem<Tab>[] = [
   { id: "search", label: "自動找職缺", icon: Compass },
   { id: "searches", label: "搜尋紀錄", icon: Search },
-  { id: "pipeline", label: "投遞包工作台", icon: Workflow },
   { id: "history", label: "我的投遞包", icon: Archive },
+  { id: "pipeline", label: "投遞包工作台", icon: Workflow },
   { id: "interview", label: "面試模擬", icon: MessagesSquare },
   { id: "resume", label: "履歷健檢", icon: FileChartColumn },
 ]
@@ -92,6 +93,7 @@ export default function App() {
                   {searchFormOpen ? "收合搜尋條件" : "修改搜尋條件"}
                 </Button>
               )}
+              <GithubStar />
               <BackendSelector />
             </header>
           )}

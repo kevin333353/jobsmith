@@ -49,5 +49,6 @@ export {
   KeyRound,
   Check,
   CircleDot,
+  Star,
   X,
 } from "lucide-react"
