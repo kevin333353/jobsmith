@@ -10,7 +10,7 @@ import { Button } from "../ui/Button"
 import { EmptyState } from "../ui/EmptyState"
 import {
   Sparkles, Network, ArrowLeft, AlertTriangle, CheckCircle2, RefreshCw, Printer, LinkIcon,
-  Pencil, FileDown,
+  FileDown,
 } from "../ui/icons"
 
 type Phase = "idle" | "running" | "approval" | "done"
@@ -33,9 +33,7 @@ export function PipelineView(
   const [profileWarning, setProfileWarning] = useState("")
   const [telemetry, setTelemetry] = useState<TelemetryEntry[]>([])
   const [error, setError] = useState("")
-  const [editing, setEditing] = useState(false)
   const [edited, setEdited] = useState<EditablePackage | null>(null)
-  const [wantPrint, setWantPrint] = useState(false)
 
   function handle(ev: PipelineEvent) {
     if (ev.type === "start") {
@@ -64,7 +62,7 @@ export function PipelineView(
     // 手動開跑（無 seed）時改用共用的真實履歷；都沒有才讓後端用範例 demo 並提醒。
     const effectiveProfile = profile ?? fallbackProfile ?? null
     setError(""); setNodeErrors([]); setProfileWarning(""); setTelemetry([]); setDone([]); setState({}); setRevisions(0)
-    setEditing(false); setEdited(null)
+    setEdited(null)
     setPhase("running"); setStatus("啟動中…")
     try {
       const resp = await fetch("/api/run", {
@@ -80,7 +78,7 @@ export function PipelineView(
 
   async function decide(decision: "y" | "n") {
     // 退回重做會重新生成成品 → 丟棄上一輪的編輯，避免舊編輯值靜默覆蓋新成品。
-    if (decision === "n") { setEditing(false); setEdited(null) }
+    if (decision === "n") setEdited(null)
     setPhase("running"); setStatus(decision === "y" ? "核可中…" : "退回中…")
     try {
       const resp = await fetch("/api/resume", {
@@ -119,20 +117,17 @@ export function PipelineView(
     }
   }
 
-  const patch = (p: Partial<EditablePackage>) => setEdited((e) => (e ? { ...e, ...p } : e))
-
-  // 進入編輯模式時，從目前成品初始化可編輯欄位（之後讀／印／匯出都用編輯後的值）。
-  function toggleEdit() {
-    if (!editing && !edited) {
-      setEdited({
-        resumeSummary: state.tailored_resume?.summary ?? "",
-        resumeBullets: (state.tailored_resume?.bullets ?? []).join("\n"),
-        coverSubject: state.cover_letter?.subject ?? "",
-        coverBody: state.cover_letter?.body ?? "",
-      })
-    }
-    setEditing((v) => !v)
-  }
+  // 文件直接可編輯（不需切換按鈕）：首次輸入時從目前成品初始化可編輯欄位，
+  // 之後讀／印／匯出都用編輯後的值。
+  const patch = (p: Partial<EditablePackage>) =>
+    setEdited((e) => ({
+      resumeSummary: state.tailored_resume?.summary ?? "",
+      resumeBullets: (state.tailored_resume?.bullets ?? []).join("\n"),
+      coverSubject: state.cover_letter?.subject ?? "",
+      coverBody: state.cover_letter?.body ?? "",
+      ...(e ?? {}),
+      ...p,
+    }))
 
   function buildPkg() {
     const r = state.tailored_resume, c = state.cover_letter, k = state.interview_kit
@@ -170,13 +165,8 @@ export function PipelineView(
     }
   }
 
-  // 列印前先退出編輯模式（編輯值已存在 edited，唯讀檢視仍顯示），避免印出 textarea。
-  // 退出編輯需先 render（textarea→唯讀）再 print，故經由 wantPrint 旗標延一個 render。
-  function printDocs() { setEditing(false); setWantPrint(true) }
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (wantPrint) { setWantPrint(false); window.print() }
-  }, [wantPrint])
+  // 文件的螢幕版是 textarea（no-print）、列印版是唯讀排版（hidden print:block），故可直接列印。
+  function printDocs() { window.print() }
 
   // 從「自動找職缺」點選某職缺帶 JD + 真實履歷進來 → 自動開跑（投遞包用本人背景）。
   // 由父層的 seed.nonce 觸發（外部訊號），是 effect 的正當用途。
@@ -228,9 +218,6 @@ export function PipelineView(
           <Button variant="secondary" onClick={loadSample} disabled={phase === "running"}>載入範例 JD</Button>
           {hasDocs && (
             <>
-              <Button variant={editing ? "primary" : "secondary"} icon={Pencil} onClick={toggleEdit}>
-                {editing ? "完成編輯" : "編輯"}
-              </Button>
               <Button variant="secondary" icon={FileDown} onClick={downloadDocx}>下載 Word</Button>
               <Button variant="secondary" icon={Printer} onClick={printDocs}>列印 / 匯出 PDF</Button>
             </>
@@ -292,7 +279,6 @@ export function PipelineView(
           {state.tailored_resume && (
             <ResumeDoc
               r={state.tailored_resume}
-              editing={editing}
               summary={edited?.resumeSummary}
               bullets={edited?.resumeBullets}
               onSummary={(v) => patch({ resumeSummary: v })}
@@ -302,7 +288,6 @@ export function PipelineView(
           {state.cover_letter && (
             <CoverLetterDoc
               c={state.cover_letter}
-              editing={editing}
               subject={edited?.coverSubject}
               body={edited?.coverBody}
               onSubject={(v) => patch({ coverSubject: v })}

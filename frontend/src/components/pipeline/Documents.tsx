@@ -96,10 +96,9 @@ export function CompanyCard({ c }: { c: CompanyBrief }) {
 }
 
 export function ResumeDoc(
-  { r, editing = false, summary, bullets, onSummary, onBullets }:
+  { r, summary, bullets, onSummary, onBullets }:
   {
     r: TailoredResume
-    editing?: boolean
     summary?: string
     bullets?: string  // 換行分隔
     onSummary?: (v: string) => void
@@ -107,24 +106,27 @@ export function ResumeDoc(
   },
 ) {
   const sum = summary ?? r.summary
-  const blist = bullets !== undefined ? bullets.split("\n").filter((b) => b.trim()) : r.bullets
+  const blistText = bullets ?? r.bullets.join("\n")
+  const blist = blistText.split("\n").filter((b) => b.trim())
+  const editable = Boolean(onSummary || onBullets)  // 工作台給 handler → 可編輯；歷史檢視沒給 → 唯讀
   return (
     <Section icon={FileText} title="③ 客製履歷">
-      {editing ? (
-        <div className="space-y-2">
-          <textarea className={`${EDIT_CLS} h-16`} value={summary ?? r.summary}
+      {/* 螢幕：直接可編輯（不需切換按鈕） */}
+      {editable && (
+        <div className="no-print space-y-2">
+          <textarea className={`${EDIT_CLS} h-16`} value={sum} aria-label="履歷專業摘要"
             onChange={(e) => onSummary?.(e.target.value)} placeholder="專業摘要" />
-          <textarea className={`${EDIT_CLS} h-32`} value={bullets ?? r.bullets.join("\n")}
+          <textarea className={`${EDIT_CLS} h-32`} value={blistText} aria-label="履歷重點（一行一個）"
             onChange={(e) => onBullets?.(e.target.value)} placeholder="一行一個重點…" />
         </div>
-      ) : (
-        <>
-          <p className="text-sm font-medium mb-2 text-slate-800">{sum}</p>
-          <ul className="list-disc pl-5 text-sm space-y-1 text-slate-700">
-            {blist.map((b, i) => <li key={i}>{b}</li>)}
-          </ul>
-        </>
       )}
+      {/* 唯讀排版：列印時用（可編輯時），或歷史檢視時直接顯示 */}
+      <div className={editable ? "hidden print:block" : ""}>
+        <p className="text-sm font-medium mb-2 text-slate-800">{sum}</p>
+        <ul className="list-disc pl-5 text-sm space-y-1 text-slate-700">
+          {blist.map((b, i) => <li key={i}>{b}</li>)}
+        </ul>
+      </div>
       {r.ats_keywords_hit.length > 0 && (<><Label>ATS 命中</Label><Tags items={r.ats_keywords_hit} tone="emerald" /></>)}
       {r.ats_keywords_missing.length > 0 && (<><Label>ATS 尚缺</Label><Tags items={r.ats_keywords_missing} tone="amber" /></>)}
       {r.notes && <p className="text-xs text-slate-500 mt-3">{r.notes}</p>}
@@ -133,10 +135,9 @@ export function ResumeDoc(
 }
 
 export function CoverLetterDoc(
-  { c, editing = false, subject, body, onSubject, onBody }:
+  { c, subject, body, onSubject, onBody }:
   {
     c: CoverLetter
-    editing?: boolean
     subject?: string
     body?: string
     onSubject?: (v: string) => void
@@ -145,21 +146,23 @@ export function CoverLetterDoc(
 ) {
   const subj = subject ?? c.subject ?? ""
   const text = body ?? c.body
+  const editable = Boolean(onSubject || onBody)  // 工作台給 handler → 可編輯；歷史檢視沒給 → 唯讀
   return (
     <Section icon={Mail} title="④ 求職信">
-      {editing ? (
-        <div className="space-y-2">
-          <input className={EDIT_CLS} value={subject ?? c.subject ?? ""}
+      {/* 螢幕：直接可編輯 */}
+      {editable && (
+        <div className="no-print space-y-2">
+          <input className={EDIT_CLS} value={subj} aria-label="求職信主旨"
             onChange={(e) => onSubject?.(e.target.value)} placeholder="主旨" />
-          <textarea className={`${EDIT_CLS} h-48`} value={body ?? c.body}
+          <textarea className={`${EDIT_CLS} h-48`} value={text} aria-label="求職信內文"
             onChange={(e) => onBody?.(e.target.value)} placeholder="求職信內文…" />
         </div>
-      ) : (
-        <>
-          {subj && <p className="text-sm font-medium mb-2 text-slate-800">主旨：{subj}</p>}
-          <div className="text-sm whitespace-pre-wrap leading-relaxed text-slate-700">{text}</div>
-        </>
       )}
+      {/* 唯讀排版：列印時用（可編輯時），或歷史檢視時直接顯示 */}
+      <div className={editable ? "hidden print:block" : ""}>
+        {subj && <p className="text-sm font-medium mb-2 text-slate-800">主旨：{subj}</p>}
+        <div className="text-sm whitespace-pre-wrap leading-relaxed text-slate-700">{text}</div>
+      </div>
     </Section>
   )
 }
