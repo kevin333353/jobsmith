@@ -627,6 +627,31 @@ def test_resume_evaluate_falls_back_when_llm_returns_bad_json(monkeypatch):
     assert assessment["issues"]
 
 
+def test_resume_evaluate_falls_back_when_llm_times_out(monkeypatch):
+    from app.models import Profile
+    server_mod._memory.clear_memory()
+    monkeypatch.setattr(server_mod, "structure_profile",
+                        lambda text: Profile(name="Candidate", summary="Backend engineer",
+                                             skills=["Python"], raw_text=text))
+
+    def timeout(text, profile):
+        raise RuntimeError("CLI timeout (>120 seconds)")
+
+    monkeypatch.setattr(server_mod, "evaluate_resume", timeout)
+    client = TestClient(server_mod.app)
+    r = client.post("/api/resume/evaluate",
+                    data={"resume_text": "Python backend engineer improved APIs by 30%"})
+    events = _parse_sse(r.text)
+    types = [e["type"] for e in events]
+
+    assert "error" not in types
+    assert "assessment" in types
+    assert types[-1] == "done"
+    assert any(e.get("step") == "fallback" for e in events if e["type"] == "progress")
+    assessment = next(e["data"] for e in events if e["type"] == "assessment")
+    assert assessment["issues"]
+
+
 def test_memory_profile_requires_explicit_save_and_can_delete():
     server_mod._memory.clear_memory()
     client = TestClient(server_mod.app)

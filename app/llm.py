@@ -69,6 +69,7 @@ def get_llm(
     temperature: float = 0,
     max_tokens: int = 2000,
     timeout: int | None = None,
+    structured_retries: int | None = None,
 ):
     """依分層與『當前後端』回傳設定好的 chat model（含重試）。"""
     backend = settings.current_backend()
@@ -77,13 +78,19 @@ def get_llm(
 
         choice = settings.cli_model("claude_cli")
         model = CLAUDE_TIER_MODELS[tier] if choice == "auto" else choice
-        return ClaudeCLIChat(model, max_tokens=max_tokens, timeout=timeout or 300)
+        return ClaudeCLIChat(
+            model,
+            max_tokens=max_tokens,
+            timeout=timeout or 300,
+            structured_retries=structured_retries or 3,
+        )
     if backend == "codex_cli":
         from app.llm_cli import CodexCLIChat
         choice = settings.cli_model("codex_cli")
         return CodexCLIChat(tier, max_tokens=max_tokens,
                             model=None if choice == "auto" else choice,
-                            timeout=timeout or 300)
+                            timeout=timeout or 300,
+                            structured_retries=structured_retries or 3)
     if backend == "openai":
         # BYOK：OpenAI 相容端點（OpenAI / DeepSeek / Gemini / Ollama / vLLM…）。
         from langchain_openai import ChatOpenAI

@@ -25,6 +25,7 @@ def test_structure_profile_uses_standard_tier(monkeypatch):
     mod.structure_profile("text")
     assert seen["tier"] == "standard"
     assert seen["kw"]["timeout"] == 60
+    assert seen["kw"]["structured_retries"] == 1
 
 
 def test_structure_profile_fills_raw_text_when_empty(monkeypatch):
@@ -142,6 +143,7 @@ def test_evaluate_resume_uses_deep_tier_with_larger_max_tokens(monkeypatch):
     assert seen["tier"] == "deep"
     # 健檢輸出大且 deep 為推理模型，max_tokens 必須高於預設 2000，避免截斷
     assert seen["kw"].get("max_tokens", 0) > 2000
+    assert seen["kw"]["structured_retries"] == 1
 
 
 def test_fallback_resume_assessment_is_usable_when_llm_format_breaks():

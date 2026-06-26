@@ -86,6 +86,19 @@ def test_claude_structured_retries_then_succeeds(monkeypatch):
     assert calls["n"] == 2
 
 
+def test_structured_loop_can_limit_retries():
+    calls = {"n": 0}
+
+    def runner(prompt):
+        calls["n"] += 1
+        return "not json"
+
+    with pytest.raises(LLMResponseFormatError):
+        cli._structured_loop(runner, Toy, [("human", "h")], "CLI", max_tries=1)
+
+    assert calls["n"] == 1
+
+
 def test_structured_loop_reports_empty_cli_response(monkeypatch):
     monkeypatch.setattr(cli, "_run_claude", lambda prompt, model, timeout=None: "   ")
     with pytest.raises(LLMResponseFormatError) as ei:
@@ -167,6 +180,20 @@ def test_codex_invoke_prompt_does_not_start_with_blank(monkeypatch):
     cli.CodexCLIChat().invoke([("human", "h")])
 
     assert not seen["prompt"].startswith("\n")
+
+
+def test_codex_invoke_uses_low_reasoning_effort(monkeypatch):
+    seen = {}
+
+    def runner(prompt, timeout=None, extra_args=None):
+        seen["extra_args"] = extra_args
+        return "ok"
+
+    monkeypatch.setattr(cli, "_run_codex", runner)
+    cli.CodexCLIChat().invoke([("human", "h")])
+
+    assert seen["extra_args"] is not None
+    assert 'model_reasoning_effort="low"' in seen["extra_args"]
 
 
 def test_run_claude_strips_null_bytes_from_prompt(monkeypatch):

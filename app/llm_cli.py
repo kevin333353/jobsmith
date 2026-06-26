@@ -156,14 +156,14 @@ def _repair_hint(exc: ValidationError) -> str:
             "\n" + "\n".join(problems))
 
 
-def _structured_loop(run_prompt, schema, messages, backend_label: str = "CLI"):
+def _structured_loop(run_prompt, schema, messages, backend_label: str = "CLI", max_tries: int = _MAX_TRIES):
     """共用結構化輸出迴圈：組提示 → 跑 → 抽/驗 → 失敗帶欄位錯誤重試。"""
     system, human = _messages_to_prompt(messages)
     base = _join_prompt(system, human, _schema_instruction(schema))
     prompt = base
     last_err = None
     last_raw = ""
-    for _ in range(_MAX_TRIES):
+    for _ in range(max(1, max_tries)):
         raw = run_prompt(prompt)
         last_raw = raw
         try:
@@ -263,11 +263,12 @@ def _record_usage(envelope: dict) -> None:
 class _CLIStructured:
     """通用結構化包裝：呼叫 runner、抽 JSON、驗證、失敗帶欄位錯誤重試。"""
 
-    def __init__(self, runner, model, schema, timeout: int = _TIMEOUT):
+    def __init__(self, runner, model, schema, timeout: int = _TIMEOUT, max_tries: int = _MAX_TRIES):
         self._runner = runner
         self._model = model
         self._schema = schema
         self._timeout = timeout
+        self._max_tries = max_tries
 
     def invoke(self, messages):
         return _structured_loop(
@@ -275,19 +276,33 @@ class _CLIStructured:
             self._schema,
             messages,
             "Claude Code CLI",
+            max_tries=self._max_tries,
         )
 
 
 class ClaudeCLIChat:
     """相容 LangChain 介面的 Claude Code CLI 後端。"""
 
-    def __init__(self, model: str, max_tokens: int = 2000, timeout: int = _TIMEOUT):
+    def __init__(
+        self,
+        model: str,
+        max_tokens: int = 2000,
+        timeout: int = _TIMEOUT,
+        structured_retries: int = _MAX_TRIES,
+    ):
         self.model = model
         self.max_tokens = max_tokens  # CLI 不需要；保留以對齊介面
         self.timeout = timeout
+        self.structured_retries = structured_retries
 
     def with_structured_output(self, schema):
-        return _CLIStructured(_run_claude, self.model, schema, timeout=self.timeout)
+        return _CLIStructured(
+            _run_claude,
+            self.model,
+            schema,
+            timeout=self.timeout,
+            max_tries=self.structured_retries,
+        )
 
     def invoke(self, messages):
         system, human = _messages_to_prompt(messages)
@@ -325,10 +340,11 @@ def _run_codex(prompt: str, timeout: int = _TIMEOUT, extra_args: list[str] | Non
 
 
 class _CodexStructured:
-    def __init__(self, schema, extra_args=None, timeout: int = _TIMEOUT):
+    def __init__(self, schema, extra_args=None, timeout: int = _TIMEOUT, max_tries: int = _MAX_TRIES):
         self._schema = schema
         self._extra = extra_args
         self._timeout = timeout
+        self._max_tries = max_tries
 
     def invoke(self, messages):
         return _structured_loop(
@@ -336,6 +352,7 @@ class _CodexStructured:
             self._schema,
             messages,
             "Codex CLI",
+            max_tries=self._max_tries,
         )
 
 
@@ -351,17 +368,27 @@ class CodexCLIChat:
         max_tokens: int = 2000,
         model: str | None = None,
         timeout: int = _TIMEOUT,
+        structured_retries: int = _MAX_TRIES,
     ):
         self.tier = tier
         self.max_tokens = max_tokens
         self.model = model
         self.timeout = timeout
+        self.structured_retries = structured_retries
 
-    def _extra(self) -> list[str] | None:
-        return ["-c", f'model="{self.model}"'] if self.model else None
+    def _extra(self) -> list[str]:
+        args = ["-c", 'model_reasoning_effort="low"']
+        if self.model:
+            args += ["-c", f'model="{self.model}"']
+        return args
 
     def with_structured_output(self, schema):
-        return _CodexStructured(schema, self._extra(), timeout=self.timeout)
+        return _CodexStructured(
+            schema,
+            self._extra(),
+            timeout=self.timeout,
+            max_tries=self.structured_retries,
+        )
 
     def invoke(self, messages):
         system, human = _messages_to_prompt(messages)

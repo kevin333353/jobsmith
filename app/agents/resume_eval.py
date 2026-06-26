@@ -174,7 +174,7 @@ def structure_profile(resume_text: str) -> Profile:
     haiku 抽取技能/定位容易漏（例如把「AI 工程師」的核心能力漏掉），改用 sonnet 較穩。
     """
     try:
-        llm = get_llm("standard", timeout=60).with_structured_output(Profile)
+        llm = get_llm("standard", timeout=60, structured_retries=1).with_structured_output(Profile)
         profile = llm.invoke([("system", STRUCTURE_SYSTEM), ("human", resume_text)])
     except Exception:
         return _fallback_profile_from_text(resume_text)
@@ -187,7 +187,7 @@ def evaluate_resume(resume_text: str, profile: Profile) -> ResumeAssessment:
     健檢報告欄位多（含巢狀 issues/rewrite_examples），且 deep 為推理模型會額外
     消耗 reasoning tokens，故提高 max_tokens 避免結構化輸出被截斷而無法解析。
     """
-    llm = get_llm("deep", max_tokens=6000, timeout=120).with_structured_output(ResumeAssessment)
+    llm = get_llm("deep", max_tokens=6000, timeout=120, structured_retries=1).with_structured_output(ResumeAssessment)
     human = (
         f"【履歷全文】\n{resume_text}\n\n"
         f"【已結構化資料】\n{profile.model_dump_json(indent=2)}"

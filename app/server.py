@@ -24,7 +24,6 @@ from app.agents.resume_eval import evaluate_resume, fallback_resume_assessment, 
 from app.cli import load_profile
 from app.graph import build_graph
 from app.intake.resume_parser import extract_text
-from app.llm_errors import LLMResponseFormatError
 from app.models import Profile
 from app.sources import regions
 from app.sources.registry import linkedin_search_url, search_all
@@ -304,7 +303,9 @@ def resume_evaluate(
             try:
                 with task_control.task_context(token):
                     assessment = evaluate_resume(text, profile)
-            except LLMResponseFormatError as exc:
+            except Exception as exc:  # noqa: BLE001 - resume health should degrade on AI/runtime failures
+                if isinstance(exc, task_control.TaskCancelled):
+                    raise
                 yield _sse({
                     "type": "progress",
                     "step": "fallback",
