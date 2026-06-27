@@ -1,0 +1,116 @@
+name: Build unsigned macOS app
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Replace the unsigned macOS assets on an existing release"
+        required: true
+        type: boolean
+        default: false
+      release_tag:
+        description: "Release tag to update when publish_release is true"
+        required: true
+        type: string
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+            asset: Jobsmith-macOS-arm64-unsigned.zip
+            artifact: jobsmith-macos-arm64-unsigned
+          - arch: x64
+            runner: macos-15-intel
+            asset: Jobsmith-macOS-x64-unsigned.zip
+            artifact: jobsmith-macos-x64-unsigned
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Create macOS icon
+        run: |
+          mkdir -p build/macos/Jobsmith.iconset
+          SRC="frontend/public/logo512.png"
+          ICONSET="build/macos/Jobsmith.iconset"
+          sips -z 16 16 "$SRC" --out "$ICONSET/icon_16x16.png"
+          sips -z 32 32 "$SRC" --out "$ICONSET/icon_16x16@2x.png"
+          sips -z 32 32 "$SRC" --out "$ICONSET/icon_32x32.png"
+          sips -z 64 64 "$SRC" --out "$ICONSET/icon_32x32@2x.png"
+          sips -z 128 128 "$SRC" --out "$ICONSET/icon_128x128.png"
+          sips -z 256 256 "$SRC" --out "$ICONSET/icon_128x128@2x.png"
+          sips -z 256 256 "$SRC" --out "$ICONSET/icon_256x256.png"
+          sips -z 512 512 "$SRC" --out "$ICONSET/icon_256x256@2x.png"
+          sips -z 512 512 "$SRC" --out "$ICONSET/icon_512x512.png"
+          sips -z 1024 1024 "$SRC" --out "$ICONSET/icon_512x512@2x.png"
+          iconutil -c icns "$ICONSET" -o build/macos/Jobsmith.icns
+
+      - name: Build unsigned app bundle
+        run: python -m PyInstaller jobsmith-macos.spec --noconfirm --clean
+
+      - name: Verify app bundle
+        run: |
+          test -d dist/Jobsmith.app
+          test -f dist/Jobsmith.app/Contents/Info.plist
+          plutil -p dist/Jobsmith.app/Contents/Info.plist
+
+      - name: Zip app bundle
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/Jobsmith.app "dist/${{ matrix.asset }}"
+          shasum -a 256 "dist/${{ matrix.asset }}" > "dist/${{ matrix.asset }}.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/${{ matrix.asset }}.sha256
+          retention-days: 14
+
+      - name: Upload to release
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ inputs.release_tag }}" \
+            "dist/${{ matrix.asset }}" \
+            "dist/${{ matrix.asset }}.sha256" \
+            --clobber

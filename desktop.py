@@ -19,26 +19,41 @@ from urllib.request import urlopen
 import uvicorn
 import webview
 
-_ROOT = Path(__file__).parent
 _TITLE = "Jobsmith"
+
+
+def _resource_root() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(getattr(sys, "_MEIPASS"))
+    return Path(__file__).parent
+
+
+_ROOT = _resource_root()
+
+
+def _frozen_paths() -> tuple[Path, Path]:
+    if sys.platform == "darwin":
+        data_dir = Path.home() / "Library" / "Application Support" / "Jobsmith"
+        return data_dir, data_dir / ".env"
+    exe_dir = Path(sys.executable).parent
+    return exe_dir / "JobsmithData", exe_dir / ".env"
 
 
 def _setup_frozen() -> None:
     """凍結成 exe 時，把可寫入檔案（SQLite、.env）導向 exe 旁的位置，並載入 exe 旁的 .env。
 
-    打包內部是唯讀的，故 checkpoints/app.sqlite 與 BYOK 的 .env 都放 exe 旁邊。
+    打包內部是唯讀的，Windows 將資料放 exe 旁邊；macOS 則放 Application Support。
     """
     if not getattr(sys, "frozen", False):
         return
-    exe_dir = Path(sys.executable).parent
-    data_dir = exe_dir / "JobsmithData"
+    data_dir, env_file = _frozen_paths()
     try:
-        data_dir.mkdir(exist_ok=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
-        data_dir = exe_dir
+        data_dir = Path(sys.executable).parent
+        env_file = data_dir / ".env"
     os.environ.setdefault("COPILOT_DB", str(data_dir / "checkpoints.sqlite"))
     os.environ.setdefault("COPILOT_APP_DB", str(data_dir / "app.sqlite"))
-    env_file = exe_dir / ".env"
     os.environ.setdefault("COPILOT_ENV_FILE", str(env_file))
     try:
         from dotenv import load_dotenv

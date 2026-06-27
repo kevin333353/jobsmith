@@ -10,7 +10,7 @@ Find jobs, audit your résumé, and generate tailored application packages — r
 
 Runs through your own **Claude Code / Codex CLI** subscription (no separate API key required) — or **bring your own key** for any OpenAI-compatible model.
 
-[繁體中文](README.md) · [**Download (Windows)**](#download) · [Quick Start](#quick-start-from-source) · [Architecture](#architecture) · [Privacy](docs/PRIVACY.md)
+[繁體中文](README.md) · [**Download (Windows / unsigned macOS)**](#download) · [Quick Start](#quick-start-from-source) · [Architecture](#architecture) · [Privacy](docs/PRIVACY.md)
 
 ![License](https://img.shields.io/badge/License-Apache_2.0-green)
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
@@ -18,6 +18,7 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Platform](https://img.shields.io/badge/Windows-64--bit-0078D6?logo=windows&logoColor=white)
+![Platform](https://img.shields.io/badge/macOS-unsigned-lightgrey?logo=apple)
 
 </div>
 
@@ -46,6 +47,17 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
 
 > **Requirements:** Windows 10/11 (64-bit; WebView2 is built into Windows 11). Your history, settings, and `.env` are saved next to the `.exe`; Jobsmith does not operate a hosted backend, and AI requests go only to the backend you choose.
 
+### Unsigned macOS build
+
+Jobsmith now has an **unsigned** macOS `.app.zip` build workflow. It is not signed with an Apple Developer ID and is not notarized, so first launch may trigger Gatekeeper. Use right-click → **Open**, or allow the app in System Settings.
+
+Maintainers can run **Actions → Build unsigned macOS app** manually. It produces:
+
+- `Jobsmith-macOS-arm64-unsigned.zip` for Apple Silicon (M1/M2/M3/M4)
+- `Jobsmith-macOS-x64-unsigned.zip` for Intel Macs
+
+The workflow also has a `publish_release=true` option that replaces those zip files and sha256 files on a chosen release tag. The macOS app stores data and `.env` in `~/Library/Application Support/Jobsmith`.
+
 ## Quick Start (from source)
 
 > **Prerequisites:** Python 3.11+, Node.js 18+, and a logged-in **Claude Code** (`claude`) or **Codex CLI** (`codex`) on your `PATH` (or a BYOK key).
@@ -67,7 +79,8 @@ desktop.bat          # launch as a native desktop window (recommended)
 | **Web**          | `run.bat` (or `python -m uvicorn app.server:app --port 8000`) | Open <http://localhost:8000>.                                     |
 | **CLI (one JD)** | `python -m app.cli data/demo_jobs/ai_engineer.txt`           | Headless single-JD run.                                            |
 
-To build your own `.exe`: `pip install pyinstaller && pyinstaller jobsmith.spec --noconfirm` → `dist/Jobsmith.exe`.
+To build your own Windows `.exe`: `pip install pyinstaller && pyinstaller jobsmith.spec --noconfirm` → `dist/Jobsmith.exe`.
+To build the unsigned macOS `.app`, build the frontend on macOS and run: `python -m PyInstaller jobsmith-macos.spec --noconfirm --clean` → `dist/Jobsmith.app`.
 
 ## Table of Contents
 
@@ -163,7 +176,7 @@ The `summarize()` step is a pure function with its own unit tests, so the aggreg
 | Backend  | Python, FastAPI, LangGraph, LangChain, Pydantic v2, SQLite, BeautifulSoup  |
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS, lucide-react                     |
 | LLM      | Claude Code CLI / Codex CLI (local) · any OpenAI-compatible endpoint (BYOK) |
-| Desktop  | pywebview (native window) · PyInstaller (single-file `.exe`)               |
+| Desktop  | pywebview (native window) · PyInstaller (single-file `.exe` / unsigned `.app`) |
 
 ## Project Structure
 
@@ -179,7 +192,7 @@ app/
   llm.py      # pluggable LLM backend resolution
 frontend/     # Vite + React + TS + Tailwind SPA
 tests/        # pytest suite
-desktop.py    # native-window launcher    jobsmith.spec  # PyInstaller build
+desktop.py    # native-window launcher    jobsmith.spec / jobsmith-macos.spec  # PyInstaller build
 ```
 
 ## Testing
@@ -194,9 +207,11 @@ cd frontend && npm run build   # type-check + production build
 ## Roadmap
 
 - [x] Single-file Windows desktop app (PyInstaller)
+- [x] unsigned macOS `.app` GitHub Actions build
 - [x] BYOK — any OpenAI-compatible backend
 - [x] Background, refresh-proof package generation with parallel runs
-- [ ] macOS / Linux builds
+- [ ] macOS signing and notarization
+- [ ] Linux builds
 - [ ] More job sources
 
 ## Contributing
