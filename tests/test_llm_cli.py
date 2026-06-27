@@ -287,3 +287,33 @@ def test_run_codex_strips_leading_blank_prompt(monkeypatch):
     cli._run_codex("\n\nReply with exactly: OK")
 
     assert seen["prompt"] == "Reply with exactly: OK"
+
+
+def test_find_cli_prefers_env_override(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CLI_PATH", "/custom/claude")
+    monkeypatch.setattr(cli.shutil, "which", lambda n: "/on/path/claude")
+    assert cli._find_cli("claude", "CLAUDE_CLI_PATH") == "/custom/claude"
+
+
+def test_find_cli_uses_which_when_no_override(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CLI_PATH", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda n: "/on/path/claude")
+    assert cli._find_cli("claude", "CLAUDE_CLI_PATH") == "/on/path/claude"
+
+
+def test_find_cli_falls_back_to_common_install_paths(tmp_path, monkeypatch):
+    # 模擬 GUI/exe：PATH 找不到（which→None），但執行檔在常見安裝路徑（npm/.local…）。
+    # 這正是「終端機跑得動、雙擊 app 卻每個 AI 呼叫都靜默降級」的根因。
+    monkeypatch.delenv("CODEX_CLI_PATH", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda n: None)
+    fake = tmp_path / "codex.cmd"
+    fake.write_text("")
+    monkeypatch.setattr(cli, "_cli_search_paths", lambda name: [tmp_path / "nope", fake])
+    assert cli._find_cli("codex", "CODEX_CLI_PATH") == str(fake)
+
+
+def test_find_cli_returns_none_when_missing_everywhere(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CLI_PATH", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda n: None)
+    monkeypatch.setattr(cli, "_cli_search_paths", lambda name: [])
+    assert cli._find_cli("claude", "CLAUDE_CLI_PATH") is None

@@ -27,6 +27,116 @@ def test_err_detail_surfaces_real_reason(monkeypatch):
     assert "model not available" in detail
 
 
+def test_ensure_backend_live_blocks_when_probe_fails(monkeypatch):
+    # AI 接不通（沒登入）→ 把關回 (False, 引導訊息)，上層據此中止搜尋、不靜默降級。
+    server_mod.mark_backend_unverified()
+    monkeypatch.setattr(server_mod, "_backend_available", lambda name: True)
+    monkeypatch.setattr(server_mod, "_probe_backend",
+                        lambda name: (_ for _ in ()).throw(RuntimeError("not logged in")))
+    ok, msg = server_mod.ensure_backend_live("claude_cli")
+    assert ok is False and "登入" in msg
+
+
+def test_ensure_backend_live_blocks_when_unavailable(monkeypatch):
+    server_mod.mark_backend_unverified()
+    monkeypatch.setattr(server_mod, "_backend_available", lambda name: False)
+    ok, msg = server_mod.ensure_backend_live("claude_cli")
+    assert ok is False and "找不到" in msg
+
+
+def test_ensure_backend_live_blocks_on_empty_reply(monkeypatch):
+    server_mod.mark_backend_unverified()
+    monkeypatch.setattr(server_mod, "_backend_available", lambda name: True)
+    monkeypatch.setattr(server_mod, "_probe_backend", lambda name: "   ")
+    ok, _ = server_mod.ensure_backend_live("claude_cli")
+    assert ok is False
+
+
+def test_ensure_backend_live_passes_and_caches(monkeypatch):
+    # 探測通過後快取：同一後端/模型的後續搜尋不再重複探測（省 ~2 秒/次）。
+    server_mod.mark_backend_unverified()
+    monkeypatch.setattr(server_mod, "_backend_available", lambda name: True)
+    calls = {"n": 0}
+
+    def probe(name):
+        calls["n"] += 1
+        return "1"
+
+    monkeypatch.setattr(server_mod, "_probe_backend", probe)
+    assert server_mod.ensure_backend_live("claude_cli")[0] is True
+    assert server_mod.ensure_backend_live("claude_cli")[0] is True
+    assert calls["n"] == 1
+
+
+def test_switch_model_invalidates_probe_cache(monkeypatch):
+    # 換模型 → 快取失效，下次搜尋重新探測（不拿舊模型的「接得通」當新模型保證）。
+    server_mod.mark_backend_verified("claude_cli")
+    sig = server_mod._backend_signature("claude_cli")
+    assert sig in server_mod._backend_live_at
+    server_mod.mark_backend_unverified("claude_cli")
+    assert sig not in server_mod._backend_live_at
+
+
+class _FakeResp:
+    def __init__(self, ok, data):
+        self.ok = ok
+        self._data = data
+
+    def json(self):
+        return self._data
+
+
+def test_parse_version_handles_prefixes_and_partials():
+    assert server_mod._parse_version("v0.2.0") == (0, 2, 0)
+    assert server_mod._parse_version("0.1") == (0, 1, 0)
+    assert server_mod._parse_version("1.2.3-beta.1") == (1, 2, 3)
+    assert server_mod._parse_version("nonsense") == ()
+    assert server_mod._parse_version("v1.0.0") > server_mod._parse_version("0.9.9")
+
+
+def test_check_for_update_flags_newer_release(monkeypatch):
+    monkeypatch.setattr(server_mod, "__version__", "0.1.0")
+    monkeypatch.setattr(server_mod.requests, "get",
+                        lambda *a, **k: _FakeResp(True, {"tag_name": "v0.2.0", "html_url": "u"}))
+    out = server_mod.check_for_update()
+    assert out["update_available"] is True
+    assert out["latest"] == "v0.2.0" and out["url"] == "u"
+
+
+def test_check_for_update_no_update_when_not_newer(monkeypatch):
+    monkeypatch.setattr(server_mod, "__version__", "0.2.0")
+    monkeypatch.setattr(server_mod.requests, "get",
+                        lambda *a, **k: _FakeResp(True, {"tag_name": "v0.2.0"}))
+    assert server_mod.check_for_update()["update_available"] is False
+
+
+def test_check_for_update_silent_on_error(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(server_mod.requests, "get", boom)
+    out = server_mod.check_for_update()
+    assert out["update_available"] is False and out["latest"] is None
+
+
+def test_update_check_endpoint(monkeypatch):
+    monkeypatch.setattr(server_mod, "check_for_update",
+                        lambda: {"current": "0.1.0", "latest": "v0.2.0",
+                                 "update_available": True, "url": "u"})
+    client = TestClient(server_mod.app)
+    r = client.get("/api/update-check")
+    assert r.status_code == 200 and r.json()["update_available"] is True
+
+
+def test_app_version_matches_pyproject():
+    # 防版本漂移：app.__version__（執行期/exe 用）必須與 pyproject.toml 一致。
+    import pathlib
+    import re as _re
+    txt = pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
+    m = _re.search(r'^version\s*=\s*"([^"]+)"', txt, _re.M)
+    assert m and m.group(1) == server_mod.__version__
+
+
 def _patch_agents(monkeypatch):
     monkeypatch.setattr(graph_mod, "parse_job",
                         lambda jd_text: ParsedJob(title="AI 工程師", company="未來智能"))

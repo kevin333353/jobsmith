@@ -445,6 +445,16 @@ export function JobSearchView(
         </div>
       )}
 
+      {profile && (profile as Record<string, unknown>).parse_degraded === true && (
+        <div className="mb-3 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>
+            AI 後端呼叫失敗，目前是<b>本機備援解析</b>（定位、技能與搜尋關鍵字可能不準）。
+            請確認右上角的 AI 引擎（Claude Code / Codex）已安裝並登入，再重新搜尋以取得精準結果。
+          </span>
+        </div>
+      )}
+
       {/* 結果標題 + 進度 + 適配色帶篩選 */}
       {(jobs.length > 0 || (busy && rankTotal > 0)) && (
         <div className="flex flex-wrap items-center gap-3 mb-3">

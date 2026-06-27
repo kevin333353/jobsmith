@@ -24,8 +24,37 @@ def test_structure_profile_uses_standard_tier(monkeypatch):
     monkeypatch.setattr(mod, "get_llm", fake)
     mod.structure_profile("text")
     assert seen["tier"] == "standard"
-    assert seen["kw"]["timeout"] == 60
-    assert seen["kw"]["structured_retries"] == 1
+    # 重點功能的上游：給足冷啟動 timeout 並允許一次重試，盡量讓 AI 解析成功而非太快退到備援。
+    assert seen["kw"]["timeout"] == 120
+    assert seen["kw"]["structured_retries"] == 2
+
+
+def test_fallback_profile_uses_title_role_for_non_software():
+    # 非軟體履歷（產品經理）：AI 降級時角色/關鍵字要讀履歷職稱行，而非一律塌成「工程師」。
+    resume = "王小明\n產品經理 / Product Manager\n負責樣品開發與 DFM 分析、BOM 管理。\n年資：2 年"
+    p = mod._fallback_profile_from_text(resume)
+    assert p.preferred_roles == ["產品經理"]
+    assert p.summary.startswith("產品經理")
+    assert p.parse_degraded is True  # 本機備援要標記降級，供前端提示檢查 AI 後端
+
+
+def test_fallback_profile_keeps_software_role_rules():
+    resume = "陳小安\nPython / FastAPI 後端工程師，三年 LLM/RAG 經驗。"
+    p = mod._fallback_profile_from_text(resume)
+    assert "後端工程師" in p.preferred_roles
+
+
+def test_infer_title_role_handles_separators_and_misses():
+    assert mod._infer_title_role(["王小明", "資深行銷企劃 ｜ Marketing Lead"]) == "資深行銷企劃"
+    assert mod._infer_title_role(["王小明", "純粹一段沒有職稱的描述文字"]) == ""
+
+
+def test_structure_profile_llm_success_not_degraded(monkeypatch):
+    # AI 解析成功 → 不可標記降級（降級只在落回本機備援時）。
+    canned = Profile(name="王", summary="產品經理", preferred_roles=["產品經理"], raw_text="r")
+    monkeypatch.setattr(mod, "get_llm", lambda tier, **kw: FakeLLM(canned))
+    out = mod.structure_profile("產品經理履歷")
+    assert out.parse_degraded is False
 
 
 def test_structure_profile_fills_raw_text_when_empty(monkeypatch):

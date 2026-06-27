@@ -106,6 +106,32 @@ def _infer_name(lines: list[str]) -> str:
     return max(candidates, key=lambda item: item[0])[1]
 
 
+# 職稱關鍵詞：用來從履歷上方那行（常是「產品經理 / Product Manager」）認出職稱，
+# 讓非軟體履歷在 AI 降級時也別一律塌成「工程師」。
+_TITLE_WORDS = (
+    "經理", "工程師", "設計師", "分析師", "規劃師", "架構師", "總監", "協理", "副理",
+    "專員", "主任", "組長", "課長", "顧問", "助理", "業務", "行銷", "企劃", "採購",
+    "會計", "財務", "人資", "客服", "編輯", "記者", "醫師", "護理", "教師", "律師",
+    "manager", "engineer", "developer", "designer", "analyst", "architect",
+    "director", "specialist", "consultant", "lead", "scientist", "coordinator",
+    "associate", "officer", "accountant", "marketing", "sales",
+)
+_TITLE_SPLIT_RE = re.compile(r"[/|｜、,，()（）\[\]【】:：]")
+
+
+def _infer_title_role(lines: list[str]) -> str:
+    """從履歷最上方找最像『職稱』的一行，回傳清理後的中文職稱片段（找不到回空字串）。"""
+    for line in lines[:8]:
+        lowered = line.lower()
+        if not any(w in line or w in lowered for w in _TITLE_WORDS):
+            continue
+        # 取分隔符前段（「產品經理 / Product Manager」→「產品經理」），去頭尾雜訊。
+        head = _TITLE_SPLIT_RE.split(line)[0].strip(" \t#·•|/")
+        if 2 <= len(head) <= 20 and not _CONTACT_OR_URL_RE.search(head):
+            return head
+    return ""
+
+
 def _infer_roles(resume_text: str, skills: list[str]) -> list[str]:
     blob = " ".join([resume_text or "", " ".join(skills)]).lower()
     roles = [role for role, markers in _ROLE_RULES if any(marker in blob for marker in markers)]
@@ -113,7 +139,11 @@ def _infer_roles(resume_text: str, skills: list[str]) -> list[str]:
     for role in roles:
         if role not in out:
             out.append(role)
-    return out[:4] or ["工程師"]
+    if out:
+        return out[:4]
+    # 軟體角色規則全沒中（非軟體履歷）→ 先用履歷自己的職稱行，最後才退到泛稱。
+    title = _infer_title_role(_resume_lines(resume_text))
+    return [title] if title else ["工程師"]
 
 
 def _fallback_profile_from_text(resume_text: str) -> Profile:
@@ -139,6 +169,7 @@ def _fallback_profile_from_text(resume_text: str) -> Profile:
         education=education,
         preferred_roles=roles,
         raw_text=resume_text,
+        parse_degraded=True,  # 本機備援 → 標記降級，供前端提示使用者檢查 AI 後端
     )
 
 
@@ -172,9 +203,13 @@ def structure_profile(resume_text: str) -> Profile:
 
     用 sonnet 而非 haiku：履歷解析是後續匹配、排序、技能缺口、產出的共同上游，
     haiku 抽取技能/定位容易漏（例如把「AI 工程師」的核心能力漏掉），改用 sonnet 較穩。
+
+    這是「重點功能」的上游：解析失敗會讓 Profile/關鍵字/排序全部塌成本機備援。故給足
+    timeout（CLI 冷啟動載入系統提示偏慢，60 秒易逾時降級）並允許一次重試（結構化輸出
+    偶爾吐到不合 schema），盡量讓 AI 解析「成功」，而非太快放棄退到備援。
     """
     try:
-        llm = get_llm("standard", timeout=60, structured_retries=1).with_structured_output(Profile)
+        llm = get_llm("standard", timeout=120, structured_retries=2).with_structured_output(Profile)
         profile = llm.invoke([("system", STRUCTURE_SYSTEM), ("human", resume_text)])
     except Exception:
         return _fallback_profile_from_text(resume_text)

@@ -37,6 +37,10 @@ class Profile(BaseModel):
     years_experience: float | None = None
     preferred_roles: list[str] = Field(default_factory=list)
     raw_text: str = Field(default="", description="原始貼上的履歷文字")
+    parse_degraded: bool = Field(
+        default=False,
+        description="True 表示 AI 後端解析失敗、改用本機備援（內容可能不準），供前端提示使用者檢查後端。",
+    )
 
     @field_validator("name", "summary", "education", "raw_text", mode="before")
     @classmethod

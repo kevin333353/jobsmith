@@ -1,23 +1,26 @@
 """FastAPI：以 SSE 串流跑反思迴圈圖，並用 HTTP 處理 human-in-the-loop。"""
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
+import requests
 from fastapi import Body, FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel
 
-from app import settings, task_control
+from app import __version__, settings, task_control
 from app.agents.company_jobs import find_company_jobs
 from app.agents.job_search import derive_queries, fallback_rank_jobs, rank_jobs
 from app.agents.resume_eval import evaluate_resume, fallback_resume_assessment, structure_profile
@@ -280,6 +283,13 @@ def resume_evaluate(
             if not text.strip():
                 yield _sse({"type": "error", "message": "請提供履歷檔案或文字"})
                 return
+            # 功能性把關：健檢同樣需要 AI，接不通就先擋下並引導登入（而非靜默備援健檢）。
+            yield _sse({"type": "progress", "step": "backend", "message": "檢查 AI 引擎連線中…"})
+            with task_control.task_context(token):
+                live, live_msg = ensure_backend_live(settings.current_backend())
+            if not live:
+                yield _sse({"type": "error", "message": live_msg})
+                return
             yield _sse({
                 "type": "progress",
                 "step": "received",
@@ -424,6 +434,15 @@ def jobs_auto(
             if not text.strip() and posted_profile is None:
                 yield _sse({"type": "error", "message": "請提供履歷檔案或文字"})
                 return
+            # 功能性把關：AI 真的接得通才開始搜尋，否則中止並引導登入——
+            # 不再讓「沒接通」靜默退到本機備援、把爛結果偽裝成 AI 解析。
+            yield _sse({"type": "progress", "step": "backend", "message": "檢查 AI 引擎連線中…"})
+            with task_control.task_context(token):
+                live, live_msg = ensure_backend_live(settings.current_backend())
+            if not live:
+                yield _sse({"type": "error", "message": live_msg})
+                return
+            token.check()
             if text.strip():
                 yield _sse({"type": "progress", "step": "structure", "message": "解析履歷中…"})
                 with task_control.task_context(token):
@@ -576,11 +595,12 @@ def export_docx(pkg: dict = Body(...)):
 
 
 def _backend_available(name: str) -> bool:
-    """偵測該後端是否可用：CLI 看執行檔在不在 PATH；openai 看有金鑰或 base_url；anthropic 看金鑰。"""
+    """偵測該後端是否可用：CLI 看執行檔找不找得到；openai 看有金鑰或 base_url；anthropic 看金鑰。"""
+    from app.llm_cli import _find_cli  # 與實際呼叫共用同一套尋找邏輯（含常見安裝路徑）
     if name == "claude_cli":
-        return bool(os.environ.get("CLAUDE_CLI_PATH") or shutil.which("claude"))
+        return bool(_find_cli("claude", "CLAUDE_CLI_PATH"))
     if name == "codex_cli":
-        return bool(os.environ.get("CODEX_CLI_PATH") or shutil.which("codex"))
+        return bool(_find_cli("codex", "CODEX_CLI_PATH"))
     if name == "openai":  # 有金鑰，或有 base_url（如 Ollama / LM Studio 本機免金鑰）即可
         return bool(settings.byok_api_key() or settings.byok_base_url())
     if name == "anthropic":
@@ -591,11 +611,13 @@ def _backend_available(name: str) -> bool:
 def _cli_version(name: str) -> str:
     """跑 `<cli> --version` 取版本字串（給設定面板的卡片顯示）；找不到/失敗回空字串。"""
     import subprocess
+
+    from app.llm_cli import _find_cli
     spec = {"claude_cli": ("CLAUDE_CLI_PATH", "claude"),
             "codex_cli": ("CODEX_CLI_PATH", "codex")}.get(name)
     if not spec:
         return ""
-    exe = os.environ.get(spec[0]) or shutil.which(spec[1])
+    exe = _find_cli(spec[1], spec[0])
     if not exe:
         return ""
     try:
@@ -642,6 +664,7 @@ def post_backend(body: BackendBody):
         settings.set_backend(body.backend, persist=True)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    mark_backend_unverified(body.backend)  # 換後端 → 下次搜尋重新功能性探測
     return {"current": settings.current_backend()}
 
 
@@ -657,6 +680,7 @@ def post_backend_model(body: CliModelBody):
         settings.set_cli_model(body.backend, body.model)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    mark_backend_unverified(body.backend)  # 換模型 → 下次搜尋重新功能性探測
     return {"backend": body.backend, "model": settings.cli_model(body.backend)}
 
 
@@ -673,6 +697,7 @@ def post_backend_byok(body: ByokBody):
         settings.set_byok(body.base_url, body.api_key, body.model)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    mark_backend_unverified("openai")  # 改 BYOK 設定 → 下次搜尋重新功能性探測
     return {"byok": settings.byok_public()}
 
 
@@ -706,6 +731,85 @@ def _probe_openai() -> str:
     return ChatOpenAI(**kwargs).invoke([("human", _PROBE_PROMPT)]).content
 
 
+def _probe_backend(name: str) -> str:
+    """真的對指定後端跑一次極短呼叫，回傳模型輸出字串（失敗則拋例外）。"""
+    if name == "claude_cli":
+        return _probe_claude()
+    if name == "codex_cli":
+        return _probe_codex()
+    if name == "openai":
+        return _probe_openai()
+    # anthropic
+    from langchain_anthropic import ChatAnthropic
+    return ChatAnthropic(model=settings.get_model("cheap"), max_tokens=50).invoke(
+        [("human", "只回覆兩個字：你好")]).content
+
+
+# ── 功能性把關 ───────────────────────────────────────────────────────────
+# 搜尋/健檢前「真的呼叫一次」後端確認接得通，而非只看 CLI 在不在——否則使用者
+# 沒登入 AI 也能照搜、靜默退到本機備援、拿到偽裝成真的爛結果。通過會快取一小段
+# 時間，避免每次搜尋都多花一次探測；切換後端/模型時失效（見 mark_backend_unverified）。
+_PROBE_OK_TTL = 600.0  # 秒
+_backend_live_at: dict[str, float] = {}
+
+
+def _backend_signature(name: str) -> str:
+    """後端 + 影響連線的設定（模型/端點）組成快取鍵；任一改變就重新探測。"""
+    if name in ("claude_cli", "codex_cli"):
+        return f"{name}:{settings.cli_model(name)}"
+    if name == "openai":
+        return f"openai:{settings.byok_base_url()}|{settings.byok_model()}"
+    return name
+
+
+def mark_backend_verified(name: str) -> None:
+    """記下「此後端剛剛實測接得通」，讓接下來的搜尋免去重複探測。"""
+    _backend_live_at[_backend_signature(name)] = time.monotonic()
+
+
+def mark_backend_unverified(name: str | None = None) -> None:
+    """讓功能性把關的快取失效（切換後端/模型/BYOK 時呼叫），下次搜尋會重新探測。"""
+    if name is None:
+        _backend_live_at.clear()
+    else:
+        _backend_live_at.pop(_backend_signature(name), None)
+
+
+def _probe_failure_message(name: str) -> str:
+    if name == "claude_cli":
+        return ("Claude Code 接不通——多半是還沒登入。請先在終端機執行 `claude` 完成登入，"
+                "或到右上角控制台按「測試」確認連線後，再開始搜尋。")
+    if name == "codex_cli":
+        return ("Codex CLI 接不通——多半是還沒登入。請先在終端機執行 `codex` 完成登入，"
+                "或到右上角控制台按「測試」確認連線後，再開始搜尋。")
+    return ("AI 後端接不通，請到右上角控制台確認 base_url / api_key / model 設定，"
+            "並按「測試」連線成功後再搜尋。")
+
+
+def ensure_backend_live(name: str) -> tuple[bool, str]:
+    """功能性把關：回 (是否接得通, 失敗時的引導訊息)。
+
+    先看後端有沒有（CLI 執行檔／金鑰），再真的呼叫一次確認接得通。通過會快取
+    _PROBE_OK_TTL 秒。任何 CLI／網路／驗證錯誤都當成「沒接通」，回引導訊息讓上層擋下搜尋。
+    """
+    if not _backend_available(name):
+        return False, "找不到對應的 CLI 或金鑰，請先到右上角控制台選擇並安裝/登入 AI 引擎。"
+    sig = _backend_signature(name)
+    last = _backend_live_at.get(sig)
+    if last is not None and (time.monotonic() - last) < _PROBE_OK_TTL:
+        return True, ""
+    try:
+        out = _probe_backend(name)
+    except task_control.TaskCancelled:
+        raise
+    except Exception:  # noqa: BLE001 — 任何 CLI/網路/驗證錯誤都視為「沒接通」
+        return False, _probe_failure_message(name)
+    if not (out or "").strip():
+        return False, _probe_failure_message(name)
+    _backend_live_at[sig] = time.monotonic()
+    return True, ""
+
+
 @app.post("/api/backend/test")
 def test_backend(body: BackendBody):
     """實測指定後端是否能連線（真的跑一次極短的 CLI 呼叫），供開場引導畫面顯示連線狀態。
@@ -721,17 +825,10 @@ def test_backend(body: BackendBody):
     try:
         with task_control.task_context(token):
             task_control.check_cancelled()
-            if name == "claude_cli":
-                out = _probe_claude()
-            elif name == "codex_cli":
-                out = _probe_codex()
-            elif name == "openai":
-                out = _probe_openai()
-            else:  # anthropic
-                from langchain_anthropic import ChatAnthropic
-                out = ChatAnthropic(model=settings.get_model("cheap"), max_tokens=50).invoke(
-                    [("human", "只回覆兩個字：你好")]).content
+            out = _probe_backend(name)
         ok = bool((out or "").strip())
+        if ok:
+            mark_backend_verified(name)  # 測試通過 → 之後搜尋免去重複探測
         return {"ok": ok, "message": "連線成功" if ok else "回覆為空，請重試。"}
     except task_control.TaskCancelled:
         return {"ok": False, "message": "已停止任務"}
@@ -739,6 +836,57 @@ def test_backend(body: BackendBody):
         return {"ok": False, "message": f"連線失敗（{type(e).__name__}），請確認 CLI 已登入。"}
     finally:
         _finish_task(token)
+
+
+# ── 更新檢查 ─────────────────────────────────────────────────────────────
+# 與右上角 star 同一管道：只連 GitHub 公開 API、不送任何使用者資料。比對目前版本與最新
+# release，新版才回 update_available=True，由前端跳「可更新」橫幅。
+# 注意：這只幫得到「已含本檢查的版本」；更早、沒有這段的舊 exe 無法事後被通知。
+_REPO = "kevin333353/jobsmith"
+_RELEASES_API = f"https://api.github.com/repos/{_REPO}/releases/latest"
+_RELEASES_PAGE = f"https://github.com/{_REPO}/releases/latest"
+
+
+def _parse_version(text: str) -> tuple[int, ...]:
+    """'v0.2.0' / '0.2.0-beta.1' → (0, 2, 0)，可直接比大小；解析不出回 ()。"""
+    m = re.match(r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?", (text or "").strip())
+    if not m:
+        return ()
+    return tuple(int(g) if g else 0 for g in m.groups())
+
+
+def check_for_update(timeout: float = 4.0) -> dict:
+    """查 GitHub 最新 release 並與目前版本比對。
+
+    Best-effort：離線／限流／逾時／無 release 一律回 update_available=False，永不拋例外、
+    永不影響 app。回傳 {current, latest, update_available, url}。
+    """
+    result = {"current": __version__, "latest": None,
+              "update_available": False, "url": _RELEASES_PAGE}
+    try:
+        r = requests.get(_RELEASES_API, timeout=timeout,
+                         headers={"Accept": "application/vnd.github+json",
+                                  "User-Agent": f"jobsmith/{__version__}"})
+        if not r.ok:
+            return result
+        data = r.json()
+        tag = (data.get("tag_name") or "").strip()
+        if not tag:
+            return result
+        result["latest"] = tag
+        if data.get("html_url"):
+            result["url"] = data["html_url"]
+        cur, latest = _parse_version(__version__), _parse_version(tag)
+        result["update_available"] = bool(cur and latest and latest > cur)
+    except Exception:  # noqa: BLE001 — 更新檢查永不可影響 app
+        pass
+    return result
+
+
+@app.get("/api/update-check")
+def update_check():
+    """前端啟動時呼叫：回目前版本與 GitHub 最新 release 的比對結果。"""
+    return check_for_update()
 
 
 class InterviewStartBody(BaseModel):

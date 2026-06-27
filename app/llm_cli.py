@@ -32,6 +32,57 @@ _TIMEOUT = 300
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def _cli_search_paths(name: str) -> list[Path]:
+    """常見的 per-user CLI 安裝位置（npm / .local / bun / homebrew）。
+
+    GUI／打包版（雙擊 .exe、pywebview）啟動的程序常常不繼承終端機 profile 的 PATH，
+    因此終端機跑得動的 `claude`／`codex`，到 app 裡 shutil.which() 卻找不到、每個 LLM
+    呼叫都拋『找不到 CLI』被靜默降級。這裡補上這些路徑當第二道防線。
+    """
+    home = Path.home()
+    paths: list[Path] = []
+    if os.name == "nt":
+        names = [f"{name}.cmd", f"{name}.exe", name]
+        roots = [
+            Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming"))) / "npm",
+            Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local"))) / "npm",
+            home / ".local" / "bin",
+            home / "AppData" / "Local" / "Programs" / name,
+            home / ".bun" / "bin",
+        ]
+    else:
+        names = [name]
+        roots = [
+            home / ".local" / "bin",
+            home / ".npm-global" / "bin",
+            home / ".bun" / "bin",
+            Path("/usr/local/bin"),
+            Path("/opt/homebrew/bin"),
+            Path("/usr/bin"),
+        ]
+    for root in roots:
+        for n in names:
+            paths.append(root / n)
+    return paths
+
+
+def _find_cli(name: str, env_var: str) -> str | None:
+    """穩健地找出 CLI 執行檔：環境變數覆寫 → PATH(shutil.which) → 常見安裝路徑。"""
+    override = (os.environ.get(env_var) or "").strip()
+    if override:
+        return override
+    found = shutil.which(name)
+    if found:
+        return found
+    for path in _cli_search_paths(name):
+        try:
+            if path.exists():
+                return str(path)
+        except OSError:
+            continue
+    return None
+
+
 def _run_process(args: list[str], *, env: dict[str, str], timeout: int):
     """Run a CLI subprocess while honoring cooperative task cancellation."""
     check_cancelled()
@@ -209,7 +260,7 @@ def _run_claude(prompt: str, model: str, allowed_tools: list[str] | None = None,
 
     allowed_tools 非空時帶 --allowedTools，讓模型可用 WebSearch/WebFetch 等工具上網查證。
     """
-    exe = os.environ.get("CLAUDE_CLI_PATH") or shutil.which("claude")
+    exe = _find_cli("claude", "CLAUDE_CLI_PATH")
     if not exe:
         raise RuntimeError("找不到 claude CLI，請確認已安裝並在 PATH。")
     env = {k: v for k, v in os.environ.items()
@@ -320,7 +371,7 @@ def _run_codex(prompt: str, timeout: int = _TIMEOUT, extra_args: list[str] | Non
     不用 --output-schema：codex 的 --output-schema 走 OpenAI 嚴格 schema（需
     additionalProperties:false 等），Pydantic 預設 schema 不相容會直接報錯。
     """
-    exe = os.environ.get("CODEX_CLI_PATH") or shutil.which("codex")
+    exe = _find_cli("codex", "CODEX_CLI_PATH")
     if not exe:
         raise RuntimeError("找不到 codex CLI，請確認已安裝並在 PATH。")
     env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
