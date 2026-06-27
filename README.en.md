@@ -37,7 +37,9 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
 
 ## Download
 
-**[⬇ Download Jobsmith for Windows (64-bit)](https://github.com/kevin333353/jobsmith/releases/latest)** — a single `.exe`. No Python or Node.js required.
+**Windows**
+
+**[⬇ Download Jobsmith for Windows (64-bit)](https://github.com/kevin333353/jobsmith/releases/latest/download/Jobsmith.exe)** — a single `.exe`. No Python or Node.js required.
 
 1. Grab `Jobsmith.exe` from the [latest release](https://github.com/kevin333353/jobsmith/releases/latest).
 2. Double-click it. A native window opens (the first launch unpacks for ~10–30s).
@@ -47,16 +49,16 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
 
 > **Requirements:** Windows 10/11 (64-bit; WebView2 is built into Windows 11). Your history, settings, and `.env` are saved next to the `.exe`; Jobsmith does not operate a hosted backend, and AI requests go only to the backend you choose.
 
-### Unsigned macOS build
+**macOS**
 
-Jobsmith now has an **unsigned** macOS `.dmg` build workflow. It is not signed with an Apple Developer ID and is not notarized, so first launch may trigger Gatekeeper. Use right-click → **Open**, or allow the app in System Settings.
+- **[⬇ Download Jobsmith for macOS Apple Silicon](https://github.com/kevin333353/jobsmith/releases/latest/download/Jobsmith-macOS-arm64-unsigned.dmg)** — M1 / M2 / M3 / M4
+- **[⬇ Download Jobsmith for macOS Intel](https://github.com/kevin333353/jobsmith/releases/latest/download/Jobsmith-macOS-x64-unsigned.dmg)** — Intel Macs
 
-Maintainers can run **Actions → Build unsigned macOS DMG** manually. It produces:
+The macOS build is an **unsigned** `.dmg`. It is not signed with an Apple Developer ID and is not notarized, so first launch may trigger Gatekeeper. Open the DMG, drag `Jobsmith.app` to Applications, then use right-click → **Open**, or allow the app in System Settings.
 
-- `Jobsmith-macOS-arm64-unsigned.dmg` for Apple Silicon (M1/M2/M3/M4)
-- `Jobsmith-macOS-x64-unsigned.dmg` for Intel Macs
+The macOS app stores data and `.env` in `~/Library/Application Support/Jobsmith`.
 
-The workflow also has a `publish_release=true` option that replaces those dmg files on a chosen release tag. The macOS app stores data and `.env` in `~/Library/Application Support/Jobsmith`.
+Maintainers can run **Actions → Build unsigned macOS DMG** manually; the workflow has a `publish_release=true` option that replaces the DMG files on a chosen release tag.
 
 ## Quick Start (from source)
 

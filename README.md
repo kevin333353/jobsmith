@@ -37,7 +37,9 @@
 
 ## 下載
 
-**[⬇ 下載 Jobsmith for Windows（64 位元）](https://github.com/kevin333353/jobsmith/releases/latest)** — 單一 `.exe`，免裝 Python / Node.js。
+**Windows**
+
+**[⬇ 下載 Jobsmith for Windows（64 位元）](https://github.com/kevin333353/jobsmith/releases/latest/download/Jobsmith.exe)** — 單一 `.exe`，免裝 Python / Node.js。
 
 1. 從 [最新 release](https://github.com/kevin333353/jobsmith/releases/latest) 下載 `Jobsmith.exe`。
 2. 雙擊開啟，會跳出原生視窗（第一次啟動會解壓約 10–30 秒）。
@@ -47,16 +49,16 @@
 
 > **需求：** Windows 10/11（64 位元；WebView2 為 Windows 11 內建）。歷史、設定、`.env` 都存在 exe 旁邊；Jobsmith 不營運 hosted backend，AI 請求只會送到你選擇的後端。
 
-### macOS unsigned build
+**macOS**
 
-macOS 目前提供 **unsigned** `.dmg` 建置流程，尚未做 Apple Developer ID 簽章與 notarization。第一次開啟可能被 Gatekeeper 擋下，請右鍵 `Jobsmith.app` →「打開」，或到系統設定允許。
+- **[⬇ 下載 Jobsmith for macOS Apple Silicon](https://github.com/kevin333353/jobsmith/releases/latest/download/Jobsmith-macOS-arm64-unsigned.dmg)** — M1 / M2 / M3 / M4
+- **[⬇ 下載 Jobsmith for macOS Intel](https://github.com/kevin333353/jobsmith/releases/latest/download/Jobsmith-macOS-x64-unsigned.dmg)** — Intel Mac
 
-開發者可到 GitHub **Actions → Build unsigned macOS DMG** 手動執行 workflow，會產出：
+macOS 目前是 **unsigned** `.dmg`，尚未做 Apple Developer ID 簽章與 notarization。第一次開啟可能被 Gatekeeper 擋下，請打開 DMG 後將 `Jobsmith.app` 拖到 Applications，再右鍵 `Jobsmith.app` →「打開」，或到系統設定允許。
 
-- `Jobsmith-macOS-arm64-unsigned.dmg`：Apple Silicon（M1/M2/M3/M4）
-- `Jobsmith-macOS-x64-unsigned.dmg`：Intel Mac
+macOS 版資料與 `.env` 會存在 `~/Library/Application Support/Jobsmith`。
 
-workflow 也提供 `publish_release=true` 選項，可把上述 dmg 覆蓋到指定 release tag。macOS 版資料與 `.env` 會存在 `~/Library/Application Support/Jobsmith`。
+開發者可到 GitHub **Actions → Build unsigned macOS DMG** 手動重打 macOS 發佈檔；workflow 提供 `publish_release=true` 選項，可把 DMG 覆蓋到指定 release tag。
 
 ## 快速開始（從原始碼）
 
