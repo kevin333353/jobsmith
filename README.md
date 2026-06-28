@@ -62,7 +62,7 @@ macOS 版資料與 `.env` 會存在 `~/Library/Application Support/Jobsmith`。
 
 ## 快速開始（從原始碼）
 
-> **環境需求：** Python 3.11+、Node.js 18+，以及 PATH 上已登入的 **Claude Code**（`claude`）或 **Codex CLI**（`codex`）（或一組 BYOK 金鑰）。
+> **環境需求：** Python 3.11+、Node.js 20.19+ / 22.13+ / 24+，以及 PATH 上已登入的 **Claude Code**（`claude`）或 **Codex CLI**（`codex`）（或一組 BYOK 金鑰）。
 
 ```bash
 git clone https://github.com/kevin333353/jobsmith.git

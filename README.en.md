@@ -62,7 +62,7 @@ Maintainers can run **Actions → Build unsigned macOS DMG** manually; the workf
 
 ## Quick Start (from source)
 
-> **Prerequisites:** Python 3.11+, Node.js 18+, and a logged-in **Claude Code** (`claude`) or **Codex CLI** (`codex`) on your `PATH` (or a BYOK key).
+> **Prerequisites:** Python 3.11+, Node.js 20.19+ / 22.13+ / 24+, and a logged-in **Claude Code** (`claude`) or **Codex CLI** (`codex`) on your `PATH` (or a BYOK key).
 
 ```bash
 git clone https://github.com/kevin333353/jobsmith.git
