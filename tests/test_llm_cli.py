@@ -259,12 +259,14 @@ def test_run_codex_strips_null_bytes_from_prompt(monkeypatch):
 
     def fake_run(args, **kwargs):
         seen["args"] = args
+        seen["stdin_text"] = kwargs.get("stdin_text")
         return FakeProc()
 
     monkeypatch.setattr(cli, "_run_process", fake_run)
     monkeypatch.setattr(cli.shutil, "which", lambda name: "codex")
     cli._run_codex("JD\x00內容\x00殘留")
     assert all("\x00" not in a for a in seen["args"])
+    assert "\x00" not in seen["stdin_text"]
 
 
 def test_run_codex_strips_leading_blank_prompt(monkeypatch):
@@ -276,7 +278,8 @@ def test_run_codex_strips_leading_blank_prompt(monkeypatch):
         stderr = ""
 
     def fake_run(args, **kwargs):
-        seen["prompt"] = args[-1]
+        seen["args"] = args
+        seen["prompt"] = kwargs.get("stdin_text")
         out_file = args[args.index("-o") + 1]
         with open(out_file, "w", encoding="utf-8") as f:
             f.write("ok")
@@ -286,7 +289,33 @@ def test_run_codex_strips_leading_blank_prompt(monkeypatch):
     monkeypatch.setattr(cli.shutil, "which", lambda name: "codex")
     cli._run_codex("\n\nReply with exactly: OK")
 
+    assert seen["args"][-1] == "-"
     assert seen["prompt"] == "Reply with exactly: OK"
+
+
+def test_run_codex_sends_prompt_via_stdin(monkeypatch):
+    seen = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(args, **kwargs):
+        seen["args"] = args
+        seen["stdin_text"] = kwargs.get("stdin_text")
+        out_file = args[args.index("-o") + 1]
+        with open(out_file, "w", encoding="utf-8") as f:
+            f.write("ok")
+        return FakeProc()
+
+    monkeypatch.setattr(cli, "_run_process", fake_run)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "codex")
+    cli._run_codex("long prompt")
+
+    assert seen["args"][-1] == "-"
+    assert "long prompt" not in seen["args"]
+    assert seen["stdin_text"] == "long prompt"
 
 
 def test_find_cli_prefers_env_override(monkeypatch):

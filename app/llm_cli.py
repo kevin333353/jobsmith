@@ -83,12 +83,18 @@ def _find_cli(name: str, env_var: str) -> str | None:
     return None
 
 
-def _run_process(args: list[str], *, env: dict[str, str], timeout: int):
+def _run_process(
+    args: list[str],
+    *,
+    env: dict[str, str],
+    timeout: int,
+    stdin_text: str | None = None,
+):
     """Run a CLI subprocess while honoring cooperative task cancellation."""
     check_cancelled()
     proc = subprocess.Popen(
         args,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -96,6 +102,13 @@ def _run_process(args: list[str], *, env: dict[str, str], timeout: int):
         env=env,
         creationflags=_NO_WINDOW,
     )
+    if stdin_text is not None and proc.stdin is not None:
+        try:
+            proc.stdin.write(stdin_text)
+            proc.stdin.close()
+            proc.stdin = None
+        except BrokenPipeError:
+            pass
     deadline = time.monotonic() + timeout
     try:
         while True:
@@ -370,6 +383,9 @@ def _run_codex(prompt: str, timeout: int = _TIMEOUT, extra_args: list[str] | Non
     結構化輸出靠 prompt 內的 JSON Schema 指示 + 上層解析/重試（與 claude_cli 一致），
     不用 --output-schema：codex 的 --output-schema 走 OpenAI 嚴格 schema（需
     additionalProperties:false 等），Pydantic 預設 schema 不相容會直接報錯。
+
+    Prompt 走 stdin（`codex exec -`），不要塞成命令列參數：正式履歷/JD prompt 可能很長，
+    Windows argv 長度限制會造成「測試連線成功、實際任務失敗」。
     """
     exe = _find_cli("codex", "CODEX_CLI_PATH")
     if not exe:
@@ -379,8 +395,8 @@ def _run_codex(prompt: str, timeout: int = _TIMEOUT, extra_args: list[str] | Non
         out_file = Path(td) / "last.txt"
         # -o 為 --output-last-message 短旗標：把模型最終訊息寫入檔案，避免混入 agent log
         args = [exe, "exec", "--skip-git-repo-check", "-s", "read-only",
-                "-o", str(out_file), *(extra_args or []), _safe_arg(prompt)]
-        proc = _run_process(args, env=env, timeout=timeout)
+                "-o", str(out_file), *(extra_args or []), "-"]
+        proc = _run_process(args, env=env, timeout=timeout, stdin_text=_safe_arg(prompt))
         if proc.returncode != 0:
             raise RuntimeError(
                 f"codex CLI 失敗（rc={proc.returncode}）：{(proc.stderr or '')[:300]}"
