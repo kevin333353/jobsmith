@@ -4,7 +4,7 @@ import type { ByokForm } from "../lib/useBackend"
 import { Cpu, KeyRound, RefreshCw, CheckCircle2, XCircle, Loader2, X, CircleDot, Circle } from "../ui/icons"
 
 // 「執行模式與模型」設定面板（仿 open-design）：本機 CLI / BYOK 兩頁。
-// 本機 CLI：掃描 PATH 偵測各 CLI、選代理、選模型（用時才選）、測試（不綁模型）。
+// 本機 CLI：掃描 PATH 偵測各 CLI、選代理、選模型策略、測試。
 export function ExecutionSettings({ onClose }: { onClose: () => void }) {
   const be = useBackend()
   const [tab, setTab] = useState<"cli" | "byok">("cli")
@@ -96,12 +96,12 @@ export function ExecutionSettings({ onClose }: { onClose: () => void }) {
             </div>
 
             <div className="mt-3 flex items-center gap-2">
-              <span className="text-sm text-slate-600">模型</span>
+              <span className="text-sm text-slate-600">模型策略</span>
               <select value={d.cli_models[cliTestId]?.current || "auto"} disabled={be.busy}
                 onChange={(e) => be.setModel(cliTestId, e.target.value)}
                 className="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-50">
                 {(d.cli_models[cliTestId]?.choices || ["auto"]).map((c) => (
-                  <option key={c} value={c}>{c === "auto" ? "Default (CLI config)" : c}</option>
+                  <option key={c} value={c}>{c === "auto" ? "預設策略" : c}</option>
                 ))}
               </select>
             </div>

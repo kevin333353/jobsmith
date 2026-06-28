@@ -621,15 +621,18 @@ def test_get_backend_includes_byok_and_cli_models():
     assert "openai" in ids                                 # BYOK 後端也列出
     assert all("kind" in o for o in d["options"])          # 帶後端類型
     assert d["cli_models"]["claude_cli"]["current"] == "auto"
-    assert "auto" in d["cli_models"]["claude_cli"]["choices"]
+    assert d["cli_models"]["claude_cli"]["choices"] == ["auto"]
+    assert d["cli_models"]["codex_cli"]["choices"] == ["auto"]
     assert "has_key" in d["byok"]                          # 不外洩金鑰本身
 
 
 def test_post_backend_model_sets_and_rejects():
     client = TestClient(server_mod.app)
     try:
-        ok = client.post("/api/backend/model", json={"backend": "claude_cli", "model": "sonnet"})
-        assert ok.status_code == 200 and ok.json()["model"] == "sonnet"
+        ok = client.post("/api/backend/model", json={"backend": "claude_cli", "model": "auto"})
+        assert ok.status_code == 200 and ok.json()["model"] == "auto"
+        invalid_model = client.post("/api/backend/model", json={"backend": "claude_cli", "model": "sonnet"})
+        assert invalid_model.status_code == 400             # 不硬編碼列出未偵測模型
         bad = client.post("/api/backend/model", json={"backend": "anthropic", "model": "x"})
         assert bad.status_code == 400                      # 非 CLI 後端不可選模型
     finally:

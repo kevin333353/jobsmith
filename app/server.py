@@ -675,7 +675,7 @@ class CliModelBody(BaseModel):
 
 @app.post("/api/backend/model")
 def post_backend_model(body: CliModelBody):
-    """設定某本機 CLI 後端要用的模型（'auto' = 自動分層）。"""
+    """設定某本機 CLI 後端的模型策略；目前只允許 'auto'，避免列出未偵測的假模型。"""
     try:
         settings.set_cli_model(body.backend, body.model)
     except ValueError as e:

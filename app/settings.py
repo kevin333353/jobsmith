@@ -59,12 +59,12 @@ def set_backend(name: str, *, persist: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 本機 CLI 模型自選：'auto' = 自動分層（解析 haiku／生成 sonnet／深思 opus）；
-# 否則固定用該模型跑所有分層。claude 用 --model 別名；codex 用 -c model=...。
+# 本機 CLI 模型策略：'auto' = 使用 Jobsmith 內建安全預設（Codex 不指定模型，Claude 依任務分層）。
+# 不在 UI 硬編碼模型名，避免使用者誤以為下拉選項是實際偵測到、可呼叫的模型。
 # ---------------------------------------------------------------------------
 CLI_MODEL_CHOICES: dict[str, list[str]] = {
-    "claude_cli": ["auto", "haiku", "sonnet", "opus"],
-    "codex_cli": ["auto", "gpt-5-codex", "gpt-5", "o4-mini"],
+    "claude_cli": ["auto"],
+    "codex_cli": ["auto"],
 }
 _cli_model: dict[str, str] = {"claude_cli": "auto", "codex_cli": "auto"}
 
@@ -75,10 +75,13 @@ def cli_model(backend: str) -> str:
 
 
 def set_cli_model(backend: str, model: str) -> None:
-    """設定 CLI 後端要用的模型；非 CLI 後端丟 ValueError。"""
+    """設定 CLI 後端的模型策略；非 CLI 後端或未知策略丟 ValueError。"""
     if backend not in _cli_model:
         raise ValueError(f"非 CLI 後端不支援模型選擇：{backend!r}")
-    _cli_model[backend] = (model or "auto").strip() or "auto"
+    value = (model or "auto").strip() or "auto"
+    if value not in CLI_MODEL_CHOICES[backend]:
+        raise ValueError("本機 CLI 模型不可由 Jobsmith 硬編碼選擇；請使用 auto 或在 CLI 自身設定模型。")
+    _cli_model[backend] = value
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ import { useBackend, CLI_AGENTS, modelLabel } from "../lib/useBackend"
 import { ExecutionSettings } from "./ExecutionSettings"
 import { Cpu, ChevronDown, KeyRound, Settings2, CircleDot, Circle } from "../ui/icons"
 
-// 右上角後端控制台（仿 open-design）：模式（本機 CLI / 自備 Key）→ 代理 → 模型（用時才選）。
+// 右上角後端控制台（仿 open-design）：模式（本機 CLI / 自備 Key）→ 代理 → 模型策略。
 // 連線測試在「執行設定」面板、與選模型分開。anthropic 是有效後端但不在此露出。
 export function BackendSelector({ refreshKey = 0 }: { refreshKey?: number }) {
   const be = useBackend(refreshKey)
@@ -79,13 +79,13 @@ export function BackendSelector({ refreshKey = 0 }: { refreshKey?: number }) {
                     )
                   })}
                 </div>
-                <p className="text-xs font-medium text-slate-400 mb-1.5">模型</p>
+                <p className="text-xs font-medium text-slate-400 mb-1.5">模型策略</p>
                 {activeCli ? (
                   <select value={d.cli_models[activeCli]?.current || "auto"} disabled={be.busy}
                     onChange={(e) => be.setModel(activeCli, e.target.value)}
                     className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-50">
                     {(d.cli_models[activeCli]?.choices || ["auto"]).map((c) => (
-                      <option key={c} value={c}>{c === "auto" ? "Default (CLI config)" : c}</option>
+                      <option key={c} value={c}>{c === "auto" ? "預設策略" : c}</option>
                     ))}
                   </select>
                 ) : (
