@@ -619,11 +619,15 @@ def test_get_backend_includes_byok_and_cli_models():
     d = client.get("/api/backend").json()
     ids = [o["id"] for o in d["options"]]
     assert "openai" in ids                                 # BYOK 後端也列出
+    assert "ollama" in ids                                 # 本機模型後端也列出
     assert all("kind" in o for o in d["options"])          # 帶後端類型
+    assert next(o for o in d["options"] if o["id"] == "ollama")["kind"] == "local"
     assert d["cli_models"]["claude_cli"]["current"] == "auto"
     assert d["cli_models"]["claude_cli"]["choices"] == ["auto"]
     assert d["cli_models"]["codex_cli"]["choices"] == ["auto"]
     assert "has_key" in d["byok"]                          # 不外洩金鑰本身
+    assert d["local_models"]["provider"] in {"ollama", "llama_cpp", "custom"}
+    assert "api_key" not in d["local_models"]
 
 
 def test_post_backend_model_sets_and_rejects():
@@ -655,6 +659,113 @@ def test_post_backend_byok_saves(monkeypatch):
         assert "OPENAI_API_KEY=gsk_secret" in env.read_text(encoding="utf-8")
     finally:
         env.unlink(missing_ok=True)
+
+
+def test_post_backend_local_model_saves(monkeypatch):
+    from pathlib import Path
+    env = Path("_local_model_server_test.env")
+    env.unlink(missing_ok=True)
+    monkeypatch.setenv("COPILOT_ENV_FILE", str(env))
+    client = TestClient(server_mod.app)
+    try:
+        r = client.post("/api/backend/local-model", json={
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "qwen3:8b",
+        })
+
+        assert r.status_code == 200
+        local = r.json()["local_models"]
+        assert local["provider"] == "ollama"
+        assert local["base_url"] == "http://127.0.0.1:11434/v1"
+        assert local["model"] == "qwen3:8b"
+        assert local["has_key"] is False
+        assert "api_key" not in local
+        txt = env.read_text(encoding="utf-8")
+        assert "LOCAL_MODEL_PROVIDER=ollama" in txt
+        assert "LOCAL_MODEL_BASE_URL=http://127.0.0.1:11434/v1" in txt
+        assert "LOCAL_MODEL_MODEL=qwen3:8b" in txt
+    finally:
+        env.unlink(missing_ok=True)
+
+
+def test_backend_local_models_detects_ollama_tags(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        ok = True
+
+        def json(self):
+            return {"models": [{"name": "qwen3:8b"}, {"model": "llama3.1:8b"}]}
+
+    def fake_get(url, timeout=0, headers=None):
+        calls.append((url, timeout, headers))
+        return FakeResponse()
+
+    monkeypatch.setattr(server_mod.requests, "get", fake_get)
+    client = TestClient(server_mod.app)
+
+    r = client.post("/api/backend/local-models", json={
+        "provider": "ollama",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "api_key": "",
+        "model": "",
+    })
+
+    assert r.status_code == 200
+    assert r.json() == {
+        "ok": True,
+        "models": ["qwen3:8b", "llama3.1:8b"],
+        "message": "偵測到 2 個本機模型",
+    }
+    assert calls[0][0] == "http://127.0.0.1:11434/api/tags"
+    assert "Authorization" not in calls[0][2]
+
+
+def test_backend_local_models_detects_openai_compatible_models(monkeypatch):
+    class FakeResponse:
+        ok = True
+
+        def json(self):
+            return {"data": [{"id": "local-model"}, {"id": "qwen2.5-coder"}]}
+
+    monkeypatch.setattr(server_mod.requests, "get", lambda url, timeout=0, headers=None: FakeResponse())
+    client = TestClient(server_mod.app)
+
+    r = client.post("/api/backend/local-models", json={
+        "provider": "llama_cpp",
+        "base_url": "http://127.0.0.1:8080",
+        "api_key": "",
+        "model": "",
+    })
+
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert r.json()["models"] == ["local-model", "qwen2.5-coder"]
+
+
+def test_backend_local_models_reports_empty_result(monkeypatch):
+    class FakeResponse:
+        ok = True
+
+        def json(self):
+            return {"models": []}
+
+    monkeypatch.setattr(server_mod.requests, "get", lambda url, timeout=0, headers=None: FakeResponse())
+    client = TestClient(server_mod.app)
+
+    r = client.post("/api/backend/local-models", json={
+        "provider": "ollama",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "api_key": "",
+        "model": "",
+    })
+
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+    assert r.json()["models"] == []
+    assert "沒有偵測到" in r.json()["message"]
 
 
 def test_backend_test_openai_probe(monkeypatch):

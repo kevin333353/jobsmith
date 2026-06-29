@@ -3,20 +3,28 @@ import { Brand } from "../ui/Brand"
 import { Button } from "../ui/Button"
 import { Cpu, CheckCircle2, XCircle, Loader2, ArrowRight, KeyRound } from "../ui/icons"
 import { newTaskId, stopTask } from "../lib/taskControl"
+import {
+  LOCAL_MODEL_PROVIDERS,
+  withDetectedLocalModels,
+  withLocalProviderDefaults,
+} from "../lib/localModels"
+import type { LocalModelForm, LocalModelProvider } from "../lib/localModels"
 
 interface BackendOption { id: string; label: string; available: boolean; kind: string }
 interface BackendData {
   options?: BackendOption[]
   current?: string
   byok?: { base_url?: string; model?: string; has_key?: boolean }
+  local_models?: { provider?: LocalModelProvider; base_url?: string; model?: string; has_key?: boolean }
 }
 
-const ONBOARD_IDS = ["claude_cli", "codex_cli", "openai"]
+const ONBOARD_IDS = ["claude_cli", "codex_cli", "ollama", "openai"]
 const CLI_IDS = ["claude_cli", "codex_cli"]
 
 const DESC: Record<string, string> = {
   claude_cli: "使用本機 Claude Code CLI，不需要在本 App 內輸入 API key。",
   codex_cli: "使用本機 Codex CLI，不需要在本 App 內輸入 API key。",
+  ollama: "使用 Ollama 或 llama.cpp 本機模型，適合免費、隱私優先的職缺排序與初步篩選。",
   openai: "使用 OpenAI 相容端點，適合 OpenAI、DeepSeek、Groq、OpenRouter、Ollama、LM Studio。",
 }
 
@@ -24,6 +32,14 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: ()
   const [options, setOptions] = useState<BackendOption[]>([])
   const [selected, setSelected] = useState("")
   const [byok, setByok] = useState({ base_url: "", api_key: "", model: "" })
+  const [local, setLocal] = useState<LocalModelForm>({
+    provider: "ollama",
+    base_url: "http://127.0.0.1:11434/v1",
+    api_key: "",
+    model: "",
+  })
+  const [localChoices, setLocalChoices] = useState<string[]>([])
+  const [localDetect, setLocalDetect] = useState<"loading" | { ok: boolean; msg: string } | undefined>()
   const [testing, setTesting] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [starting, setStarting] = useState(false)
@@ -40,6 +56,14 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: ()
           api_key: "",
           model: d.byok?.model || "",
         })
+        setLocal({
+          provider: d.local_models?.provider || "ollama",
+          base_url: d.local_models?.base_url || "http://127.0.0.1:11434/v1",
+          api_key: "",
+          model: d.local_models?.model || "",
+        })
+        setLocalChoices([])
+        setLocalDetect(undefined)
         const firstAvail = opts.find((o) => o.id !== "openai" && o.available)
         setSelected(
           d.current && ONBOARD_IDS.includes(d.current)
@@ -73,6 +97,44 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: ()
     return true
   }
 
+  async function saveLocalIfNeeded() {
+    if (selected !== "ollama") return true
+    const r = await fetch("/api/backend/local-model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(local),
+    })
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}))
+      setResult({ ok: false, message: d.error || "本機模型設定格式不正確。" })
+      return false
+    }
+    return true
+  }
+
+  async function saveConfigIfNeeded() {
+    return (await saveByokIfNeeded()) && (await saveLocalIfNeeded())
+  }
+
+  async function detectLocalModels() {
+    setLocalDetect("loading")
+    try {
+      const r = await fetch("/api/backend/local-models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(local),
+      })
+      const d = await r.json()
+      const models = Array.isArray(d.models) ? d.models : []
+      setLocalChoices(models)
+      setLocal((cur) => withDetectedLocalModels(cur, models))
+      setLocalDetect({ ok: Boolean(d.ok), msg: d.message || (d.ok ? "偵測完成" : "偵測失敗") })
+    } catch {
+      setLocalChoices([])
+      setLocalDetect({ ok: false, msg: "偵測失敗，請確認本機服務已啟動。" })
+    }
+  }
+
   async function test() {
     if (!selected) return
     const ctrl = new AbortController()
@@ -81,7 +143,7 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: ()
     setTesting(true)
     setResult(null)
     try {
-      if (!(await saveByokIfNeeded())) return
+      if (!(await saveConfigIfNeeded())) return
       const r = await fetch("/api/backend/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -123,7 +185,7 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: ()
     if (!selected) return
     setStarting(true)
     try {
-      if (!(await saveByokIfNeeded())) return
+      if (!(await saveConfigIfNeeded())) return
       const r = await fetch("/api/backend", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -140,7 +202,10 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: ()
     }
   }
 
-  const selectedKind = selected === "openai" ? "byok" : "cli"
+  const selectedKind = selected === "openai" ? "byok" : selected === "ollama" ? "local" : "cli"
+  const modelChoices = local.model && !localChoices.includes(local.model)
+    ? [local.model, ...localChoices]
+    : localChoices
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm grid place-items-center p-4">
@@ -148,14 +213,14 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: ()
         <div className="mb-5"><Brand /></div>
         <h1 className="text-lg font-bold text-slate-900 mb-1">選擇 AI 後端</h1>
         <p className="text-sm text-slate-500 mb-4">
-          可以使用本機 Claude/Codex CLI，也可以用 OpenAI 相容端點 (BYOK)。選好後可先測試連線。
+          可以使用本機 Claude/Codex CLI、本機模型，或 OpenAI 相容端點 (BYOK)。選好後可先測試連線。
         </p>
 
         <div className="space-y-2.5">
           {options.map((o) => {
             const active = selected === o.id
             const isByok = o.id === "openai"
-            const disabled = !isByok && !o.available
+            const disabled = CLI_IDS.includes(o.id) && !o.available
             const Icon = isByok ? KeyRound : Cpu
             return (
               <button key={o.id} type="button" onClick={() => choose(o.id)}
@@ -193,6 +258,52 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: ()
             <input value={byok.model} onChange={(e) => setByok((b) => ({ ...b, model: e.target.value }))}
               placeholder="Model，例如 deepseek-chat / gpt-4o-mini" aria-label="Model"
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200" />
+          </div>
+        )}
+
+        {selectedKind === "local" && (
+          <div className="mt-4 space-y-2">
+            <select value={local.provider}
+              onChange={(e) => {
+                setLocal((cur) => withLocalProviderDefaults(e.target.value as LocalModelProvider, cur))
+                setLocalChoices([])
+                setLocalDetect(undefined)
+              }}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-200">
+              {LOCAL_MODEL_PROVIDERS.map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+            <input value={local.base_url} onChange={(e) => {
+              setLocal((b) => ({ ...b, base_url: e.target.value }))
+              setLocalChoices([])
+              setLocalDetect(undefined)
+            }}
+              placeholder="Base URL，例如 http://127.0.0.1:11434/v1" aria-label="Local model base URL"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200" />
+            <div className="flex items-center gap-2">
+              {modelChoices.length > 0 ? (
+                <select value={local.model} onChange={(e) => setLocal((b) => ({ ...b, model: e.target.value }))}
+                  aria-label="Local model"
+                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-200">
+                  {modelChoices.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              ) : (
+                <input value={local.model} onChange={(e) => setLocal((b) => ({ ...b, model: e.target.value }))}
+                  placeholder="Model，例如 qwen3:8b / llama3.1:8b" aria-label="Local model"
+                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200" />
+              )}
+              <button type="button" onClick={detectLocalModels} disabled={localDetect === "loading"}
+                className="text-sm border border-slate-300 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 disabled:opacity-50">
+                {localDetect === "loading" ? "偵測中" : "重新偵測"}
+              </button>
+            </div>
+            <input value={local.api_key} onChange={(e) => setLocal((b) => ({ ...b, api_key: e.target.value }))}
+              type="password" autoComplete="off" placeholder="API Key（多數本機服務可留空）" aria-label="Local model API key"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200" />
+            {localDetect && localDetect !== "loading" && (
+              <p className={`text-xs ${localDetect.ok ? "text-emerald-600" : "text-rose-600"}`}>{localDetect.msg}</p>
+            )}
           </div>
         )}
 

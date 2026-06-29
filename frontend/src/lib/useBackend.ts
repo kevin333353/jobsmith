@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "react"
+import type { LocalModelForm, LocalModelProvider } from "./localModels"
 import { newTaskId, stopTask } from "./taskControl"
 
 // 後端控制台共用資料層：右上角 popover 與「執行設定」面板都用這個 hook。
 export interface BackendOption { id: string; label: string; available: boolean; kind: string; version?: string }
 export interface CliModel { choices: string[]; current: string }
 export interface ByokCfg { base_url: string; model: string; has_key: boolean }
+export interface LocalModelCfg { provider: LocalModelProvider; base_url: string; model: string; has_key: boolean }
+export interface LocalModelDetectResult { ok: boolean; models: string[]; message: string }
 export interface BackendData {
   current: string
   options: BackendOption[]
   cli_models: Record<string, CliModel>
   byok: ByokCfg
+  local_models: LocalModelCfg
 }
 export type TestState = "loading" | { ok: boolean; msg: string } | undefined
 export interface ByokForm { base_url: string; api_key: string; model: string }
@@ -59,6 +63,20 @@ export function useBackend(reloadKey = 0) {
     } finally { setBusy(false) }
   }
 
+  async function saveLocalModel(cfg: LocalModelForm, activateAfter: boolean) {
+    setBusy(true)
+    try {
+      await postJSON("/api/backend/local-model", cfg)
+      if (activateAfter) await activate("ollama")
+      await reload()
+    } finally { setBusy(false) }
+  }
+
+  async function detectLocalModels(cfg: LocalModelForm): Promise<LocalModelDetectResult> {
+    const r = await postJSON("/api/backend/local-models", cfg)
+    return await r.json()
+  }
+
   async function runTest(id: string) {
     const previous = testTasksRef.current[id]
     if (previous) {
@@ -97,7 +115,7 @@ export function useBackend(reloadKey = 0) {
     }
   }
 
-  return { data, busy, tests, reload, activate, setModel, saveByok, runTest, stopTest }
+  return { data, busy, tests, reload, activate, setModel, saveByok, saveLocalModel, detectLocalModels, runTest, stopTest }
 }
 
 // CLI 代理清單（目前支援的本機 CLI）。顯示名與後端 id 對應。

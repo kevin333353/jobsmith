@@ -630,12 +630,14 @@ def export_docx(pkg: dict = Body(...)):
 
 
 def _backend_available(name: str) -> bool:
-    """偵測該後端是否可用：CLI 看執行檔找不找得到；openai 看有金鑰或 base_url；anthropic 看金鑰。"""
+    """偵測該後端是否可用：CLI 看執行檔；local/BYOK 看必要設定；anthropic 看金鑰。"""
     from app.llm_cli import _find_cli  # 與實際呼叫共用同一套尋找邏輯（含常見安裝路徑）
     if name == "claude_cli":
         return bool(_find_cli("claude", "CLAUDE_CLI_PATH"))
     if name == "codex_cli":
         return bool(_find_cli("codex", "CODEX_CLI_PATH"))
+    if name == "ollama":
+        return bool(settings.local_model_base_url() and settings.local_model_model())
     if name == "openai":  # 有金鑰，或有 base_url（如 Ollama / LM Studio 本機免金鑰）即可
         return bool(settings.byok_api_key() or settings.byok_base_url())
     if name == "anthropic":
@@ -684,6 +686,7 @@ def get_backend():
             for b in settings.CLI_MODEL_CHOICES
         },
         "byok": settings.byok_public(),
+        "local_models": settings.local_model_public(),
     }
 
 
@@ -736,6 +739,109 @@ def post_backend_byok(body: ByokBody):
     return {"byok": settings.byok_public()}
 
 
+class LocalModelBody(BaseModel):
+    provider: str = "ollama"
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+
+
+def _local_model_base_url(provider: str, base_url: str) -> str:
+    return (base_url or settings.LOCAL_MODEL_DEFAULT_BASE_URLS.get(provider, "")).strip().rstrip("/")
+
+
+def _ollama_tags_url(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3].rstrip("/")
+    return f"{base}/api/tags"
+
+
+def _openai_models_url(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        return f"{base}/models"
+    return f"{base}/v1/models"
+
+
+def _dedupe_model_names(names: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in names:
+        name = (raw or "").strip()
+        if not name or name in seen:
+            continue
+        out.append(name)
+        seen.add(name)
+    return out
+
+
+def _models_from_ollama_tags(data: dict) -> list[str]:
+    rows = data.get("models") or []
+    return _dedupe_model_names([
+        str(row.get("name") or row.get("model") or "")
+        for row in rows if isinstance(row, dict)
+    ])
+
+
+def _models_from_openai_list(data: dict) -> list[str]:
+    rows = data.get("data") or []
+    return _dedupe_model_names([
+        str(row.get("id") or row.get("name") or row.get("model") or "")
+        for row in rows if isinstance(row, dict)
+    ])
+
+
+def _detect_local_model_names(provider: str, base_url: str, api_key: str = "") -> list[str]:
+    if provider not in settings.LOCAL_MODEL_PROVIDERS:
+        raise ValueError(f"不支援的本機模型來源：{provider}")
+    if not base_url:
+        raise ValueError("請先填寫本機模型 Base URL。")
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    if provider == "ollama":
+        r = requests.get(_ollama_tags_url(base_url), timeout=6, headers=headers)
+        if not r.ok:
+            raise RuntimeError(f"Ollama 回應 HTTP {r.status_code}")
+        return _models_from_ollama_tags(r.json())
+    r = requests.get(_openai_models_url(base_url), timeout=6, headers=headers)
+    if not r.ok:
+        raise RuntimeError(f"本機模型服務回應 HTTP {r.status_code}")
+    return _models_from_openai_list(r.json())
+
+
+@app.post("/api/backend/local-models")
+def post_backend_local_models(body: LocalModelBody):
+    """偵測本機模型清單；不儲存設定，也不切換目前後端。"""
+    provider = (body.provider or "ollama").strip() or "ollama"
+    base_url = _local_model_base_url(provider, body.base_url)
+    api_key = body.api_key.strip()
+    try:
+        models = _detect_local_model_names(provider, base_url, api_key)
+    except Exception as e:  # noqa: BLE001 — 偵測失敗要回 UI 友善訊息
+        return {"ok": False, "models": [], "message": f"偵測失敗：{_err_detail(e)}"}
+    if not models:
+        return {"ok": False, "models": [], "message": "沒有偵測到本機模型，請確認服務已啟動且模型已安裝。"}
+    return {"ok": True, "models": models, "message": f"偵測到 {len(models)} 個本機模型"}
+
+
+@app.post("/api/backend/local-model")
+def post_backend_local_model(body: LocalModelBody):
+    """儲存本機模型設定；Ollama/llama.cpp 皆走 OpenAI-compatible endpoint。"""
+    try:
+        settings.set_local_model(
+            provider=body.provider,
+            base_url=body.base_url,
+            api_key=body.api_key,
+            model=body.model,
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    mark_backend_unverified("ollama")
+    return {"local_models": settings.local_model_public()}
+
+
 # 連線測試：用最輕的模型（haiku）+ 最短提示，只求拿到任何回覆，盡快完成。
 _PROBE_PROMPT = "只輸出數字 1"
 _PROBE_TIMEOUT = 45
@@ -766,12 +872,28 @@ def _probe_openai() -> str:
     return ChatOpenAI(**kwargs).invoke([("human", _PROBE_PROMPT)]).content
 
 
+def _probe_local_model() -> str:
+    """用目前本機模型設定跑一次極短呼叫。"""
+    from langchain_openai import ChatOpenAI
+    kwargs = {
+        "model": settings.local_model_model() or "qwen3:8b",
+        "base_url": settings.local_model_base_url(),
+        "api_key": settings.local_model_api_key(),
+        "max_tokens": 50,
+        "max_retries": 1,
+        "timeout": _PROBE_TIMEOUT,
+    }
+    return ChatOpenAI(**kwargs).invoke([("human", _PROBE_PROMPT)]).content
+
+
 def _probe_backend(name: str) -> str:
     """真的對指定後端跑一次極短呼叫，回傳模型輸出字串（失敗則拋例外）。"""
     if name == "claude_cli":
         return _probe_claude()
     if name == "codex_cli":
         return _probe_codex()
+    if name == "ollama":
+        return _probe_local_model()
     if name == "openai":
         return _probe_openai()
     # anthropic
@@ -792,6 +914,11 @@ def _backend_signature(name: str) -> str:
     """後端 + 影響連線的設定（模型/端點）組成快取鍵；任一改變就重新探測。"""
     if name in ("claude_cli", "codex_cli"):
         return f"{name}:{settings.cli_model(name)}"
+    if name == "ollama":
+        return (
+            f"ollama:{settings.local_model_provider()}|"
+            f"{settings.local_model_base_url()}|{settings.local_model_model()}"
+        )
     if name == "openai":
         return f"openai:{settings.byok_base_url()}|{settings.byok_model()}"
     return name
@@ -817,8 +944,17 @@ def _probe_failure_message(name: str) -> str:
     if name == "codex_cli":
         return ("Codex CLI 接不通——多半是還沒登入。請先在終端機執行 `codex` 完成登入，"
                 "或到右上角控制台按「測試」確認連線後，再開始搜尋。")
+    if name == "ollama":
+        return ("本機模型接不通，請確認 Ollama 或 llama.cpp server 已啟動、base URL 正確，"
+                "並且模型名稱已安裝/載入。")
     return ("AI 後端接不通，請到右上角控制台確認 base_url / api_key / model 設定，"
             "並按「測試」連線成功後再搜尋。")
+
+
+def _backend_missing_message(name: str) -> str:
+    if name == "ollama":
+        return "請先設定本機模型名稱，並確認 Ollama/llama.cpp 服務已啟動。"
+    return "找不到對應的 CLI 或金鑰，請先到右上角控制台選擇並安裝/登入 AI 引擎。"
 
 
 def ensure_backend_live(name: str) -> tuple[bool, str]:
@@ -828,7 +964,7 @@ def ensure_backend_live(name: str) -> tuple[bool, str]:
     _PROBE_OK_TTL 秒。任何 CLI／網路／驗證錯誤都當成「沒接通」，回引導訊息讓上層擋下搜尋。
     """
     if not _backend_available(name):
-        return False, "找不到對應的 CLI 或金鑰，請先到右上角控制台選擇並安裝/登入 AI 引擎。"
+        return False, _backend_missing_message(name)
     sig = _backend_signature(name)
     last = _backend_live_at.get(sig)
     if last is not None and (time.monotonic() - last) < _PROBE_OK_TTL:
@@ -855,7 +991,7 @@ def test_backend(body: BackendBody):
     if name not in settings.SUPPORTED_BACKENDS:
         return JSONResponse({"ok": False, "message": "不支援的後端"}, status_code=400)
     if not _backend_available(name):
-        return {"ok": False, "message": "找不到對應的 CLI 或金鑰，請確認已安裝並登入。"}
+        return {"ok": False, "message": _backend_missing_message(name)}
     token = _task_from_id(body.task_id) if body.task_id else None
     try:
         with task_control.task_context(token):

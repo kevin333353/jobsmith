@@ -103,6 +103,20 @@ def get_llm(
         if settings.byok_api_key():
             kwargs["api_key"] = settings.byok_api_key()
         return _with_friendly_structured_errors(ChatOpenAI(**kwargs), "API key 後端")
+    if backend == "ollama":
+        # 本機模型：Ollama 預設；llama.cpp 可用自訂 OpenAI 相容端點。
+        from langchain_openai import ChatOpenAI
+        kwargs = dict(
+            model=settings.local_model_model() or "qwen3:8b",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_retries=2,
+            base_url=settings.local_model_base_url(),
+            api_key=settings.local_model_api_key(),
+        )
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return _with_friendly_structured_errors(ChatOpenAI(**kwargs), "本機模型")
     if backend == "anthropic":
         from langchain_anthropic import ChatAnthropic
         kwargs = dict(

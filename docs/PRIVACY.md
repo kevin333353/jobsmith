@@ -21,9 +21,10 @@ Windows `.exe` 版本會盡量把 app data 寫在執行檔旁的 `JobsmithData/`
 
 - `claude_cli`：交給你本機已登入的 Claude Code CLI 處理
 - `codex_cli`：交給你本機已登入的 Codex CLI 處理
+- `ollama`：送到你設定的本機 OpenAI-compatible endpoint（預設 Ollama，也可用 llama.cpp server）
 - `openai`：送到你設定的 OpenAI-compatible endpoint
 
-Jobsmith 本身不營運雲端資料服務。如果你設定第三方 AI endpoint，該 provider 的資料政策會適用。
+Jobsmith 本身不營運雲端資料服務。如果本機模型 endpoint 指向 `127.0.0.1` / `localhost`，AI 請求會留在你的機器；如果你設定第三方 AI endpoint，該 provider 的資料政策會適用。
 
 ## 候選人 Profile
 

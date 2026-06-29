@@ -74,6 +74,23 @@ def test_openai_backend_selected(monkeypatch):
     assert getattr(llm, "model_name", getattr(llm, "model", None)) == "deepseek-chat"
 
 
+def test_ollama_backend_uses_local_model_config(monkeypatch):
+    monkeypatch.setenv("LLM_BACKEND", "ollama")
+    monkeypatch.setenv("LOCAL_MODEL_PROVIDER", "ollama")
+    monkeypatch.setenv("LOCAL_MODEL_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("LOCAL_MODEL_MODEL", "qwen3:8b")
+    monkeypatch.delenv("LOCAL_MODEL_API_KEY", raising=False)
+    importlib.reload(settings_mod)
+    importlib.reload(llm_mod)
+
+    from langchain_openai import ChatOpenAI
+    llm = llm_mod.get_llm("standard")
+
+    assert isinstance(llm, ChatOpenAI)
+    assert getattr(llm, "model_name", getattr(llm, "model", None)) == "qwen3:8b"
+    assert str(getattr(llm, "openai_api_base", "")) == "http://127.0.0.1:11434/v1"
+
+
 def test_claude_cli_rejects_manual_model_override(monkeypatch):
     m = _reload(monkeypatch, "claude_cli")
     settings_mod.set_cli_model("claude_cli", "auto")
@@ -123,6 +140,36 @@ def test_set_byok_persists_to_env(monkeypatch):
         settings_mod.set_byok("https://api.x.com/v1", "", "gpt-4o")
         assert settings_mod.byok_api_key() == "sk-secret"
         assert settings_mod.byok_model() == "gpt-4o"
+    finally:
+        env.unlink(missing_ok=True)
+
+
+def test_set_local_model_persists_to_env(monkeypatch):
+    env = Path("_local_model_settings_test.env")
+    env.unlink(missing_ok=True)
+    monkeypatch.setenv("COPILOT_ENV_FILE", str(env))
+    monkeypatch.delenv("LOCAL_MODEL_PROVIDER", raising=False)
+    monkeypatch.delenv("LOCAL_MODEL_BASE_URL", raising=False)
+    monkeypatch.delenv("LOCAL_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("LOCAL_MODEL_MODEL", raising=False)
+    importlib.reload(settings_mod)
+    try:
+        settings_mod.set_local_model(
+            provider="llama_cpp",
+            base_url="http://127.0.0.1:8080/v1",
+            api_key="",
+            model="local-model",
+        )
+
+        txt = env.read_text(encoding="utf-8")
+        assert "LOCAL_MODEL_PROVIDER=llama_cpp" in txt
+        assert "LOCAL_MODEL_BASE_URL=http://127.0.0.1:8080/v1" in txt
+        assert "LOCAL_MODEL_MODEL=local-model" in txt
+        pub = settings_mod.local_model_public()
+        assert pub["provider"] == "llama_cpp"
+        assert pub["model"] == "local-model"
+        assert pub["has_key"] is False
+        assert "api_key" not in pub
     finally:
         env.unlink(missing_ok=True)
 

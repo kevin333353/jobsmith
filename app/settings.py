@@ -22,21 +22,24 @@ def get_model(tier: str) -> str:
 
 # 可選後端（仿 open-design 的「本機 CLI ＋ BYOK」）：
 # - claude_cli / codex_cli：本機 CLI 訂閱，免 API key、不吃額度（預設，主推）。
+# - ollama：本機模型（Ollama 預設；llama.cpp 可用自訂 OpenAI 相容端點）。
 # - openai：BYOK 的 OpenAI 相容端點（base_url + key + model），一個後端吃 OpenAI / DeepSeek /
 #           Gemini / Groq / OpenRouter / Ollama / LM Studio / vLLM 等任何相容服務。
 # - anthropic：Anthropic API 金鑰（雲端/部署可選，不在主選單露出）。
-SUPPORTED_BACKENDS: tuple[str, ...] = ("claude_cli", "codex_cli", "openai", "anthropic")
+SUPPORTED_BACKENDS: tuple[str, ...] = ("claude_cli", "codex_cli", "ollama", "openai", "anthropic")
 
 BACKEND_LABELS: dict[str, str] = {
     "claude_cli": "Claude Code CLI（訂閱）",
     "codex_cli": "Codex CLI（訂閱）",
+    "ollama": "本機模型（Ollama / llama.cpp）",
     "openai": "OpenAI 相容 (BYOK)",
     "anthropic": "Anthropic API（金鑰）",
 }
 
-# 後端類型：cli=本機 CLI 訂閱、byok=自帶金鑰的 OpenAI 相容端點、api=雲端 API 金鑰。
+# 後端類型：cli=本機 CLI 訂閱、local=本機模型、byok=自帶金鑰的 OpenAI 相容端點、api=雲端 API 金鑰。
 BACKEND_KIND: dict[str, str] = {
-    "claude_cli": "cli", "codex_cli": "cli", "openai": "byok", "anthropic": "api",
+    "claude_cli": "cli", "codex_cli": "cli", "ollama": "local",
+    "openai": "byok", "anthropic": "api",
 }
 
 # 啟動時的後端（.env 的 LLM_BACKEND；預設本機 claude_cli）。執行期可由 set_backend 切換。
@@ -95,6 +98,45 @@ _byok: dict[str, str] = {
 }
 _ENV_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
+LOCAL_MODEL_PROVIDERS: tuple[str, ...] = ("ollama", "llama_cpp", "custom")
+LOCAL_MODEL_DEFAULT_BASE_URLS: dict[str, str] = {
+    "ollama": "http://127.0.0.1:11434/v1",
+    "llama_cpp": "http://127.0.0.1:8080/v1",
+    "custom": "",
+}
+
+
+def _clean_local_provider(provider: str) -> str:
+    value = (provider or "ollama").strip() or "ollama"
+    if value not in LOCAL_MODEL_PROVIDERS:
+        raise ValueError(
+            f"unsupported local model provider: {value!r}（可選：{', '.join(LOCAL_MODEL_PROVIDERS)}）"
+        )
+    return value
+
+
+def _local_model_default_base_url(provider: str) -> str:
+    return LOCAL_MODEL_DEFAULT_BASE_URLS.get(provider, "")
+
+
+def _initial_local_model() -> dict[str, str]:
+    try:
+        provider = _clean_local_provider(os.environ.get("LOCAL_MODEL_PROVIDER", "ollama"))
+    except ValueError:
+        provider = "ollama"
+    return {
+        "provider": provider,
+        "base_url": (
+            os.environ.get("LOCAL_MODEL_BASE_URL", "").strip()
+            or _local_model_default_base_url(provider)
+        ),
+        "api_key": os.environ.get("LOCAL_MODEL_API_KEY", "").strip(),
+        "model": os.environ.get("LOCAL_MODEL_MODEL", "").strip(),
+    }
+
+
+_local_model: dict[str, str] = _initial_local_model()
+
 
 def _env_file() -> Path:
     """.env 路徑（測試可用 COPILOT_ENV_FILE 改指向暫存檔，避免動到真檔）。"""
@@ -119,6 +161,38 @@ def byok_public() -> dict:
         "base_url": _byok["base_url"],
         "model": _byok["model"],
         "has_key": bool(_byok["api_key"]),
+    }
+
+
+def local_model_provider() -> str:
+    return _local_model["provider"]
+
+
+def local_model_base_url() -> str:
+    return _local_model["base_url"] or _local_model_default_base_url(_local_model["provider"])
+
+
+def local_model_api_key() -> str:
+    if _local_model["api_key"]:
+        return _local_model["api_key"]
+    provider = _local_model["provider"]
+    if provider == "ollama":
+        return "ollama"
+    if provider == "llama_cpp":
+        return "llama.cpp"
+    return "local"
+
+
+def local_model_model() -> str:
+    return _local_model["model"]
+
+
+def local_model_public() -> dict:
+    return {
+        "provider": _local_model["provider"],
+        "base_url": local_model_base_url(),
+        "model": _local_model["model"],
+        "has_key": bool(_local_model["api_key"]),
     }
 
 
@@ -149,6 +223,33 @@ def set_byok(
             "OPENAI_BASE_URL": _byok["base_url"],
             "OPENAI_MODEL": _byok["model"],
             "OPENAI_API_KEY": _byok["api_key"],
+        })
+
+
+def set_local_model(
+    *,
+    provider: str = "ollama",
+    base_url: str = "",
+    api_key: str = "",
+    model: str = "",
+    persist: bool = True,
+) -> None:
+    """更新本機模型設定。api_key 為空 = 保留既有金鑰；Ollama/llama.cpp 通常不需要。"""
+    clean_provider = _clean_local_provider(_env_value("LOCAL_MODEL_PROVIDER", provider))
+    clean_base_url = _env_value("LOCAL_MODEL_BASE_URL", base_url) or _local_model_default_base_url(clean_provider)
+    clean_model = _env_value("LOCAL_MODEL_MODEL", model)
+    clean_api_key = _env_value("LOCAL_MODEL_API_KEY", api_key)
+    _local_model["provider"] = clean_provider
+    _local_model["base_url"] = clean_base_url
+    _local_model["model"] = clean_model
+    if clean_api_key:
+        _local_model["api_key"] = clean_api_key
+    if persist:
+        _write_env({
+            "LOCAL_MODEL_PROVIDER": _local_model["provider"],
+            "LOCAL_MODEL_BASE_URL": _local_model["base_url"],
+            "LOCAL_MODEL_MODEL": _local_model["model"],
+            "LOCAL_MODEL_API_KEY": _local_model["api_key"],
         })
 
 

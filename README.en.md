@@ -8,7 +8,7 @@
 
 Find jobs, audit your résumé, and generate tailored application packages — résumé, cover letter, interview prep, and company research. Generation runs **in the background** (it keeps going if you navigate away or refresh, and multiple jobs run in parallel); you watch the live multi-agent trace, then review and approve each package in your library.
 
-Runs through your own **Claude Code / Codex CLI** subscription (no separate API key required) — or **bring your own key** for any OpenAI-compatible model.
+Runs through your own **Claude Code / Codex CLI** subscription (no separate API key required), **Ollama / llama.cpp local models**, or **bring your own key** for any OpenAI-compatible model.
 
 [繁體中文](README.md) · [**Download (Windows / unsigned macOS)**](#download) · [Quick Start](#quick-start-from-source) · [Architecture](#architecture) · [Privacy](docs/PRIVACY.md)
 
@@ -22,7 +22,7 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
 
 </div>
 
-> The app UI is in Traditional Chinese, tailored to Taiwan's job-search conventions (104 / Cake / Yourator / LinkedIn). Data is stored locally by default; when you run AI features, your résumé and prompts are handled by the CLI or BYOK backend you choose. See [Privacy and Data Handling](docs/PRIVACY.md).
+> The app UI is in Traditional Chinese, tailored to Taiwan's job-search conventions (104 / Cake / Yourator / LinkedIn). Data is stored locally by default; when you run AI features, your résumé and prompts are handled by the CLI, local model, or BYOK backend you choose. See [Privacy and Data Handling](docs/PRIVACY.md).
 
 ---
 
@@ -45,6 +45,7 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
 2. Double-click it. A native window opens (the first launch unpacks for ~10–30s).
 3. In the **top-right control panel**, choose your AI engine:
    - **Local CLI** — a logged-in **Claude Code** (`claude`) or **Codex CLI** (`codex`) on your `PATH`, **or**
+   - **Local model** — a running **Ollama** server (default `http://127.0.0.1:11434/v1`) or **llama.cpp server** (default `http://127.0.0.1:8080/v1`), **or**
    - **BYOK** — `base_url` + `api_key` + `model` for any OpenAI-compatible endpoint (OpenAI, DeepSeek, Gemini, Groq, OpenRouter, Ollama, LM Studio, vLLM…).
 
 > **Requirements:** Windows 10/11 (64-bit; WebView2 is built into Windows 11). Your history, settings, and `.env` are saved next to the `.exe`; Jobsmith does not operate a hosted backend, and AI requests go only to the backend you choose.
@@ -62,7 +63,7 @@ Maintainers can run **Actions → Build unsigned macOS DMG** manually; the workf
 
 ## Quick Start (from source)
 
-> **Prerequisites:** Python 3.11+, Node.js 20.19+ / 22.13+ / 24+, and a logged-in **Claude Code** (`claude`) or **Codex CLI** (`codex`) on your `PATH` (or a BYOK key).
+> **Prerequisites:** Python 3.11+, Node.js 20.19+ / 22.13+ / 24+, and either a logged-in **Claude Code** (`claude`) / **Codex CLI** (`codex`) on your `PATH`, a running Ollama/llama.cpp server, or a BYOK key.
 
 ```bash
 git clone https://github.com/kevin333353/jobsmith.git
@@ -114,15 +115,16 @@ To build the unsigned macOS `.app`, build the frontend on macOS and run: `python
 
 ## LLM Backends
 
-Pick your AI engine from the **top-right control panel** — a **local CLI subscription** (no API key) or **BYOK** (any OpenAI-compatible endpoint). Selecting a backend takes effect immediately; the **Test** button is an optional connection check, never a gate. Local CLIs offer a **rescan** action and a **selectable model**.
+Pick your AI engine from the **top-right control panel** — a **local CLI subscription** (no API key), a **local model** (Ollama / llama.cpp), or **BYOK** (any OpenAI-compatible endpoint). Selecting a backend takes effect immediately; the **Test** button is an optional connection check, never a gate. Local CLIs offer a **rescan** action and a **selectable model**.
 
 | Backend      | Auth                                   | Notes                                                                                                    |
 | ------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `claude_cli` | Claude Code subscription               | **Default.** No API key; strips `ANTHROPIC_*` env. Model selectable (auto-tiered by default).            |
 | `codex_cli`  | Codex subscription                     | No API key. Model selectable; defaults to your Codex config.                                             |
+| `ollama`     | Local model                            | Defaults to Ollama; can be switched to llama.cpp server or a custom local OpenAI-compatible endpoint. Detects local models for dropdown selection; quality and speed depend on your hardware and model. |
 | `openai`     | BYOK — any OpenAI-compatible endpoint  | `base_url` + `api_key` + `model`. Works with OpenAI, DeepSeek, Gemini, Groq, OpenRouter, Ollama, LM Studio, vLLM… |
 
-CLI backends call the corresponding provider through the logged-in CLI on your machine. BYOK calls the OpenAI-compatible endpoint you configure. Jobsmith does not operate a hosted backend or send your data to the project maintainer's server. BYOK credentials are written only to your local `.env`. An API-key backend (`anthropic`) also exists for self-hosting or CI.
+CLI backends call the corresponding provider through the logged-in CLI on your machine. Local models and BYOK both call the OpenAI-compatible endpoint you configure. Jobsmith does not operate a hosted backend or send your data to the project maintainer's server. BYOK and local model settings are written only to your local `.env`. An API-key backend (`anthropic`) also exists for self-hosting or CI.
 
 ## Privacy and Data
 
@@ -144,7 +146,7 @@ React SPA (Vite)  ──HTTP · SSE · poll──►  FastAPI
                   │
                   ▼
           Pluggable LLM backend
-          claude_cli · codex_cli · openai (BYOK)
+          claude_cli · codex_cli · ollama (local) · openai (BYOK)
 ```
 
 - **Background generation:** each *Generate* spins up its own LangGraph `StateGraph` with a private in-memory checkpointer, run on a small thread pool — so jobs run **in parallel** and survive client disconnects (refresh / navigation). The browser **polls** `/api/run/events` for live progress; the finished package is written to the app database. This decouples the run from the HTTP request — closing the tab doesn't stop it.
@@ -177,7 +179,7 @@ The `summarize()` step is a pure function with its own unit tests, so the aggreg
 | -------- | -------------------------------------------------------------------------- |
 | Backend  | Python, FastAPI, LangGraph, LangChain, Pydantic v2, SQLite, BeautifulSoup  |
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS, lucide-react                     |
-| LLM      | Claude Code CLI / Codex CLI (local) · any OpenAI-compatible endpoint (BYOK) |
+| LLM      | Claude Code CLI / Codex CLI (local) · Ollama / llama.cpp local models · any OpenAI-compatible endpoint (BYOK) |
 | Desktop  | pywebview (native window) · PyInstaller (single-file `.exe` / unsigned `.app`, distributed as `.dmg` on macOS) |
 
 ## Project Structure
@@ -211,6 +213,7 @@ cd frontend && npm run build   # type-check + production build
 - [x] Single-file Windows desktop app (PyInstaller)
 - [x] unsigned macOS `.dmg` GitHub Actions build
 - [x] BYOK — any OpenAI-compatible backend
+- [x] Ollama / llama.cpp local model backend
 - [x] Background, refresh-proof package generation with parallel runs
 - [ ] macOS signing and notarization
 - [ ] Linux builds
