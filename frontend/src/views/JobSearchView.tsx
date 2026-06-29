@@ -6,6 +6,7 @@ import { SAMPLE_RESUME } from "../sampleResume"
 import { resolveJd } from "../lib/resolveJd"
 import { newTaskId, stopTask } from "../lib/taskControl"
 import { profileDisplayName, profileSummary } from "../lib/profiles"
+import { EXPERIENCE_FILTER_OPTIONS } from "../components/jobs/experience"
 import { JobList } from "../components/jobs/JobList"
 import { appendSalaryFilter, type SalaryUnit } from "../components/jobs/salaryFilter"
 import { SRC_LABEL } from "../lib/sources"
@@ -31,15 +32,6 @@ const sortByFit = (arr: JobMatch[]) =>
 
 // 適配色帶分段篩選（內部仍用 fit_score）：全部 / 高(≥80) / 中以上(≥60)。
 const FIT_BANDS = [{ v: 0, l: "全部" }, { v: 80, l: "高" }, { v: 60, l: "中以上" }]
-const EXPERIENCE_OPTIONS = [
-  { v: "", l: "不限年資" },
-  { v: "0", l: "無經驗 / 新鮮人" },
-  { v: "1", l: "1 年內" },
-  { v: "2", l: "2 年內" },
-  { v: "3", l: "3 年內" },
-  { v: "5", l: "5 年內" },
-]
-
 // 搜尋地點（縣市，對應後端 app/sources/regions.py）：搜尋前選定、所有來源一致生效；不選＝全台。
 const COUNTIES = [
   "台北市", "新北市", "桃園市", "台中市", "台南市", "高雄市",
@@ -413,7 +405,7 @@ export function JobSearchView(
 
         <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
           <label htmlFor="experience-select" className="font-medium text-slate-700 flex items-center gap-1.5">
-            <Timer className="w-4 h-4 text-slate-400" />年資要求
+            <Timer className="w-4 h-4 text-slate-400" />最高可接受要求年資
           </label>
           <select
             id="experience-select"
@@ -422,8 +414,8 @@ export function JobSearchView(
             disabled={busy}
             className="border border-slate-300 rounded-lg px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-50"
           >
-            {EXPERIENCE_OPTIONS.map((o) => (
-              <option key={o.v || "all"} value={o.v}>{o.l}</option>
+            {EXPERIENCE_FILTER_OPTIONS.map((o) => (
+              <option key={o.value || "all"} value={o.value}>{o.label}</option>
             ))}
           </select>
           <span className="text-xs text-slate-400">只排除明確高於門檻的職缺；未標示年資者會保留。</span>
