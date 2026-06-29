@@ -29,6 +29,7 @@ from app.intake.resume_parser import extract_text
 from app.models import Profile
 from app.sources import regions
 from app.sources.registry import linkedin_search_url, search_all
+from app.sources.salary import filter_jobs_by_salary, monthly_salary_bounds
 from app.store import db as _appdb
 from app.store import history as _history
 from app.store import memory as _memory
@@ -405,6 +406,10 @@ def jobs_auto(
     pages: int = Form(default=2),
     region: str = Form(default=""),
     max_experience_years: float | None = Form(default=None),
+    salary_unit: str = Form(default="monthly"),
+    min_salary: float | None = Form(default=None),
+    max_salary: float | None = Form(default=None),
+    include_unknown_salary: bool = Form(default=True),
     task_id: str = Form(default=""),
 ):
     """履歷 → 自動找職缺：解析履歷 → 推導關鍵字 → 搜尋多站 →（選填）併入指定公司的開缺 → 依履歷排序。
@@ -416,6 +421,11 @@ def jobs_auto(
     pages = max(1, min(5, pages))
     max_experience_years = (
         None if max_experience_years is None else max(0.0, min(50.0, max_experience_years))
+    )
+    min_salary_monthly, max_salary_monthly = monthly_salary_bounds(
+        min_salary,
+        max_salary,
+        salary_unit,
     )
     region_keys = regions.parse_keys(region)
     area = regions.area_codes(region_keys)
@@ -476,6 +486,12 @@ def jobs_auto(
                                    if res.source == "104" or regions.match_location(j.location, region_keys)]
                     region_matched_count += len(region_kept)
                     kept = _filter_jobs_by_experience(region_kept, max_experience_years)
+                    kept = filter_jobs_by_salary(
+                        kept,
+                        min_monthly=min_salary_monthly,
+                        max_monthly=max_salary_monthly,
+                        include_unknown=include_unknown_salary,
+                    )
                     yield _sse({"type": "source", "source": res.source,
                                 "count": len(kept), "blocked": res.blocked})
                     for j in kept:
@@ -519,6 +535,12 @@ def jobs_auto(
                 except Exception:
                     found = []
                 found = _filter_jobs_by_experience(found, max_experience_years)
+                found = filter_jobs_by_salary(
+                    found,
+                    min_monthly=min_salary_monthly,
+                    max_monthly=max_salary_monthly,
+                    include_unknown=include_unknown_salary,
+                )
                 added = 0
                 for j in found:
                     key = j.url or (j.title + j.company)

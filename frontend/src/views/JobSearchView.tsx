@@ -7,13 +7,14 @@ import { resolveJd } from "../lib/resolveJd"
 import { newTaskId, stopTask } from "../lib/taskControl"
 import { profileDisplayName, profileSummary } from "../lib/profiles"
 import { JobList } from "../components/jobs/JobList"
+import { appendSalaryFilter, type SalaryUnit } from "../components/jobs/salaryFilter"
 import { SRC_LABEL } from "../lib/sources"
 import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
 import { Skeleton } from "../ui/Skeleton"
 import { EmptyState } from "../ui/EmptyState"
-import { Search, Upload, Loader2, ExternalLink, AlertTriangle, CheckCircle2, XCircle, Building2, Layers, MapPin, X, UserRound, Timer } from "../ui/icons"
+import { Search, Upload, Loader2, ExternalLink, AlertTriangle, CheckCircle2, XCircle, Building2, Layers, MapPin, X, UserRound, Timer, Coins } from "../ui/icons"
 
 const SNAP_KEY = "copilot.jobsearch.v1"  // 上次搜尋結果快取（重新整理/重開沿用）
 
@@ -87,6 +88,10 @@ export function JobSearchView(
   const [searchedCompanies, setSearchedCompanies] = useState<string[]>([])
   const [pages, setPages] = useState(2)  // 每個來源抓幾頁（越多越全、但越慢）
   const [maxExperienceYears, setMaxExperienceYears] = useState("")
+  const [salaryUnit, setSalaryUnit] = useState<SalaryUnit>("monthly")
+  const [minSalary, setMinSalary] = useState("")
+  const [maxSalary, setMaxSalary] = useState("")
+  const [includeUnknownSalary, setIncludeUnknownSalary] = useState(true)
 
   const abortRef = useRef<AbortController | null>(null)  // 取消上一個未完成的搜尋
   const taskIdRef = useRef("")
@@ -110,6 +115,10 @@ export function JobSearchView(
       if (Array.isArray(s.searchedCompanies)) setSearchedCompanies(s.searchedCompanies)
       if (typeof s.pages === "number") setPages(s.pages)
       if (typeof s.maxExperienceYears === "string") setMaxExperienceYears(s.maxExperienceYears)
+      if (s.salaryUnit === "monthly" || s.salaryUnit === "annual") setSalaryUnit(s.salaryUnit)
+      if (typeof s.minSalary === "string") setMinSalary(s.minSalary)
+      if (typeof s.maxSalary === "string") setMaxSalary(s.maxSalary)
+      if (typeof s.includeUnknownSalary === "boolean") setIncludeUnknownSalary(s.includeUnknownSalary)
       if (Array.isArray(s.regions)) setRegions(s.regions)
       if (s.profile) setProfile(s.profile as UserProfile)
       if (Array.isArray(s.jobs) && s.jobs.length) { setDone(true); setFormOpen(false) }
@@ -125,10 +134,12 @@ export function JobSearchView(
       localStorage.setItem(SNAP_KEY, JSON.stringify({
         text, companies, jobs, companyJobs, queries, sources,
         linkedin, fallback, searchedCompanies, profile, pages, regions, maxExperienceYears,
+        salaryUnit, minSalary, maxSalary, includeUnknownSalary,
       }))
     } catch { /* localStorage 不可用/已滿則略過 */ }
   }, [done, jobs, companyJobs, queries, sources, linkedin, fallback,
-      searchedCompanies, profile, text, companies, pages, regions, maxExperienceYears])
+      searchedCompanies, profile, text, companies, pages, regions, maxExperienceYears,
+      salaryUnit, minSalary, maxSalary, includeUnknownSalary])
 
   // 回報是否已有結果，App 才知道要不要在右上角顯示「收合搜尋條件」鈕。
   useEffect(() => {
@@ -179,6 +190,12 @@ export function JobSearchView(
     form.append("pages", String(pages))
     if (regions.length) form.append("region", regions.join(","))
     if (maxExperienceYears) form.append("max_experience_years", maxExperienceYears)
+    appendSalaryFilter(form, {
+      unit: salaryUnit,
+      min: minSalary,
+      max: maxSalary,
+      includeUnknown: includeUnknownSalary,
+    })
   }
 
   async function go(
@@ -410,6 +427,55 @@ export function JobSearchView(
             ))}
           </select>
           <span className="text-xs text-slate-400">只排除明確高於門檻的職缺；未標示年資者會保留。</span>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+          <label htmlFor="salary-unit-select" className="font-medium text-slate-700 flex items-center gap-1.5">
+            <Coins className="w-4 h-4 text-slate-400" />薪資篩選
+          </label>
+          <select
+            id="salary-unit-select"
+            value={salaryUnit}
+            onChange={(e) => setSalaryUnit(e.target.value as SalaryUnit)}
+            disabled={busy}
+            className="border border-slate-300 rounded-lg px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-50"
+          >
+            <option value="monthly">月薪</option>
+            <option value="annual">年薪</option>
+          </select>
+          <input
+            type="number"
+            min="0"
+            step="1000"
+            inputMode="numeric"
+            value={minSalary}
+            onChange={(e) => setMinSalary(e.target.value)}
+            disabled={busy}
+            placeholder={salaryUnit === "annual" ? "最低年薪" : "最低月薪"}
+            className="w-28 border border-slate-300 rounded-lg px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-50"
+          />
+          <span className="text-slate-400">–</span>
+          <input
+            type="number"
+            min="0"
+            step="1000"
+            inputMode="numeric"
+            value={maxSalary}
+            onChange={(e) => setMaxSalary(e.target.value)}
+            disabled={busy}
+            placeholder={salaryUnit === "annual" ? "最高年薪" : "最高月薪"}
+            className="w-28 border border-slate-300 rounded-lg px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-50"
+          />
+          <label className="inline-flex items-center gap-1.5 text-xs text-slate-500">
+            <input
+              type="checkbox"
+              checked={includeUnknownSalary}
+              onChange={(e) => setIncludeUnknownSalary(e.target.checked)}
+              disabled={busy}
+              className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-300 disabled:opacity-50"
+            />
+            保留面議 / 未標示
+          </label>
         </div>
 
         <div className="mt-4">

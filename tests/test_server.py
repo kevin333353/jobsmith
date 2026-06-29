@@ -970,6 +970,49 @@ def test_jobs_auto_filters_jobs_by_max_experience_before_ranking(monkeypatch):
     assert titles == {"Junior", "Unknown"}
 
 
+def test_jobs_auto_filters_jobs_by_salary_before_ranking(monkeypatch):
+    """選薪資範圍：明確不相交的職缺不送進 AI 排序；面議/未標示依 checkbox 決定。"""
+    from app.models import JobMatch, JobPosting, Profile, SearchResult
+    monkeypatch.setattr(server_mod, "structure_profile",
+                        lambda text: Profile(name="王", summary="後端", raw_text=text))
+    monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["Python"])
+    ranked_titles = []
+
+    def fake_search(q, limit=15, pages=1, area=None):
+        return [SearchResult(source="104", jobs=[
+            JobPosting(source="104", title="Too low", company="A", url="s1",
+                       salary="月薪 NT$40,000–50,000"),
+            JobPosting(source="104", title="Match", company="B", url="s2",
+                       salary="月薪 NT$60,000–90,000"),
+            JobPosting(source="cake", title="Too high", company="C", url="s3",
+                       salary="年薪 TWD 1,500,000–2,100,000"),
+            JobPosting(source="104", title="Negotiable", company="D", url="s4",
+                       salary="面議"),
+            JobPosting(source="yourator", title="Unknown", company="E", url="s5"),
+        ])]
+
+    def fake_rank(profile, jobs, top_k=None):
+        ranked_titles.extend(j.title for j in jobs)
+        return [JobMatch(job=j, fit_score=70) for j in jobs]
+
+    monkeypatch.setattr(server_mod, "search_all", fake_search)
+    monkeypatch.setattr(server_mod, "rank_jobs", fake_rank)
+    client = TestClient(server_mod.app)
+    r = client.post("/api/jobs/auto", data={
+        "resume_text": "Python 後端",
+        "salary_unit": "monthly",
+        "min_salary": "60000",
+        "max_salary": "90000",
+        "include_unknown_salary": "false",
+    })
+    events = _parse_sse(r.text)
+
+    assert not any(e["type"] == "error" for e in events)
+    assert ranked_titles == ["Match"]
+    titles = {m["job"]["title"] for e in events if e["type"] == "ranked_batch" for m in e["data"]}
+    assert titles == {"Match"}
+
+
 def test_pipeline_chat_resume_applies_update(monkeypatch):
     """履歷對話：AI 給修訂 → 端點回傳 reply + updated{summary,bullets}。"""
     from app.agents import refine as refine_mod
