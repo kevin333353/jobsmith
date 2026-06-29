@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jobsmith"
-version = "0.1.2"
+version = "0.1.3"
 description = "A local-first, multi-agent job-search co-pilot for the Taiwan market — find jobs, audit your résumé, generate tailored application packages, and run mock interviews."
 readme = "README.md"
 requires-python = ">=3.11"

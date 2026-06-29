@@ -207,6 +207,22 @@ class JobPosting(BaseModel):
     snippet: str | None = Field(default=None, description="職缺摘要")
     requirements: list[str] = Field(default_factory=list)
     raw_text: str = Field(default="", description="原始職缺全文，供後續解析")
+    experience_text: str | None = Field(default=None, description="來源文字中的年資要求片段")
+    min_years: float | None = Field(default=None, description="解析出的最低年資要求")
+
+    @model_validator(mode="after")
+    def _infer_experience(self):
+        if self.min_years is None and not self.experience_text:
+            from app.sources.experience import parse_experience_requirement
+            min_years, text = parse_experience_requirement(
+                self.title,
+                self.snippet,
+                " ".join(str(r) for r in self.requirements),
+                self.raw_text,
+            )
+            self.min_years = min_years
+            self.experience_text = text
+        return self
 
 
 class JobMatch(BaseModel):

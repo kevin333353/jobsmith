@@ -341,6 +341,19 @@ def test_find_cli_falls_back_to_common_install_paths(tmp_path, monkeypatch):
     assert cli._find_cli("codex", "CODEX_CLI_PATH") == str(fake)
 
 
+def test_find_cli_falls_back_to_nvm_install_paths(tmp_path, monkeypatch):
+    # macOS GUI app 不會載入 shell profile；nvm 裝的 npm global CLI 會藏在 ~/.nvm/versions/node/*/bin。
+    # 這個 home-relative 掃描在 Windows 測試環境也安全，能避免把 pathlib 強行切成 PosixPath。
+    monkeypatch.delenv("CLAUDE_CLI_PATH", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda n: None)
+    monkeypatch.setattr(cli.Path, "home", lambda: tmp_path)
+    fake = tmp_path / ".nvm" / "versions" / "node" / "v22.22.1" / "bin" / "claude"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("")
+
+    assert cli._find_cli("claude", "CLAUDE_CLI_PATH") == str(fake)
+
+
 def test_find_cli_returns_none_when_missing_everywhere(monkeypatch):
     monkeypatch.delenv("CLAUDE_CLI_PATH", raising=False)
     monkeypatch.setattr(cli.shutil, "which", lambda n: None)

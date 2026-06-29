@@ -13,7 +13,7 @@ import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
 import { Skeleton } from "../ui/Skeleton"
 import { EmptyState } from "../ui/EmptyState"
-import { Search, Upload, Loader2, ExternalLink, AlertTriangle, CheckCircle2, XCircle, Building2, Layers, MapPin, X, UserRound } from "../ui/icons"
+import { Search, Upload, Loader2, ExternalLink, AlertTriangle, CheckCircle2, XCircle, Building2, Layers, MapPin, X, UserRound, Timer } from "../ui/icons"
 
 const SNAP_KEY = "copilot.jobsearch.v1"  // 上次搜尋結果快取（重新整理/重開沿用）
 
@@ -30,6 +30,14 @@ const sortByFit = (arr: JobMatch[]) =>
 
 // 適配色帶分段篩選（內部仍用 fit_score）：全部 / 高(≥80) / 中以上(≥60)。
 const FIT_BANDS = [{ v: 0, l: "全部" }, { v: 80, l: "高" }, { v: 60, l: "中以上" }]
+const EXPERIENCE_OPTIONS = [
+  { v: "", l: "不限年資" },
+  { v: "0", l: "無經驗 / 新鮮人" },
+  { v: "1", l: "1 年內" },
+  { v: "2", l: "2 年內" },
+  { v: "3", l: "3 年內" },
+  { v: "5", l: "5 年內" },
+]
 
 // 搜尋地點（縣市，對應後端 app/sources/regions.py）：搜尋前選定、所有來源一致生效；不選＝全台。
 const COUNTIES = [
@@ -78,6 +86,7 @@ export function JobSearchView(
   const [file, setFile] = useState<File | null>(null)
   const [searchedCompanies, setSearchedCompanies] = useState<string[]>([])
   const [pages, setPages] = useState(2)  // 每個來源抓幾頁（越多越全、但越慢）
+  const [maxExperienceYears, setMaxExperienceYears] = useState("")
 
   const abortRef = useRef<AbortController | null>(null)  // 取消上一個未完成的搜尋
   const taskIdRef = useRef("")
@@ -100,6 +109,7 @@ export function JobSearchView(
       if (typeof s.fallback === "boolean") setFallback(s.fallback)
       if (Array.isArray(s.searchedCompanies)) setSearchedCompanies(s.searchedCompanies)
       if (typeof s.pages === "number") setPages(s.pages)
+      if (typeof s.maxExperienceYears === "string") setMaxExperienceYears(s.maxExperienceYears)
       if (Array.isArray(s.regions)) setRegions(s.regions)
       if (s.profile) setProfile(s.profile as UserProfile)
       if (Array.isArray(s.jobs) && s.jobs.length) { setDone(true); setFormOpen(false) }
@@ -114,11 +124,11 @@ export function JobSearchView(
     try {
       localStorage.setItem(SNAP_KEY, JSON.stringify({
         text, companies, jobs, companyJobs, queries, sources,
-        linkedin, fallback, searchedCompanies, profile, pages, regions,
+        linkedin, fallback, searchedCompanies, profile, pages, regions, maxExperienceYears,
       }))
     } catch { /* localStorage 不可用/已滿則略過 */ }
   }, [done, jobs, companyJobs, queries, sources, linkedin, fallback,
-      searchedCompanies, profile, text, companies, pages, regions])
+      searchedCompanies, profile, text, companies, pages, regions, maxExperienceYears])
 
   // 回報是否已有結果，App 才知道要不要在右上角顯示「收合搜尋條件」鈕。
   useEffect(() => {
@@ -168,6 +178,7 @@ export function JobSearchView(
   function appendSearchOptions(form: FormData) {
     form.append("pages", String(pages))
     if (regions.length) form.append("region", regions.join(","))
+    if (maxExperienceYears) form.append("max_experience_years", maxExperienceYears)
   }
 
   async function go(
@@ -381,6 +392,24 @@ export function JobSearchView(
             ))}
           </select>
           <span className="text-xs text-slate-400">頁數越多找得越全，但搜尋與評分也越久（預設 2 頁）。</span>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+          <label htmlFor="experience-select" className="font-medium text-slate-700 flex items-center gap-1.5">
+            <Timer className="w-4 h-4 text-slate-400" />年資要求
+          </label>
+          <select
+            id="experience-select"
+            value={maxExperienceYears}
+            onChange={(e) => setMaxExperienceYears(e.target.value)}
+            disabled={busy}
+            className="border border-slate-300 rounded-lg px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-50"
+          >
+            {EXPERIENCE_OPTIONS.map((o) => (
+              <option key={o.v || "all"} value={o.v}>{o.l}</option>
+            ))}
+          </select>
+          <span className="text-xs text-slate-400">只排除明確高於門檻的職缺；未標示年資者會保留。</span>
         </div>
 
         <div className="mt-4">

@@ -58,6 +58,7 @@ export interface PipelineState {
 export interface JobPosting {
   source: string; title: string; company: string; location?: string | null;
   salary?: string | null; url: string; snippet?: string | null; requirements: string[];
+  experience_text?: string | null; min_years?: number | null;
 }
 export interface JobMatch {
   job: JobPosting; fit_score: number; matched: string[]; gaps: string[]; reason: string;

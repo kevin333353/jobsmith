@@ -2,7 +2,6 @@
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -405,6 +404,7 @@ def jobs_auto(
     companies: str = Form(default=""),
     pages: int = Form(default=2),
     region: str = Form(default=""),
+    max_experience_years: float | None = Form(default=None),
     task_id: str = Form(default=""),
 ):
     """履歷 → 自動找職缺：解析履歷 → 推導關鍵字 → 搜尋多站 →（選填）併入指定公司的開缺 → 依履歷排序。
@@ -414,6 +414,9 @@ def jobs_auto(
             代碼篩選（涵蓋更全），其餘來源在結果端用 location 過濾，使用者看到的就是同一份地區結果。
     """
     pages = max(1, min(5, pages))
+    max_experience_years = (
+        None if max_experience_years is None else max(0.0, min(50.0, max_experience_years))
+    )
     region_keys = regions.parse_keys(region)
     area = regions.area_codes(region_keys)
     text, text_error = _resume_text_from_request(file, resume_text)
@@ -462,14 +465,17 @@ def jobs_auto(
 
             seen: set[str] = set()
             resume_jobs = []
+            region_matched_count = 0
             for q in queries[:3]:
                 token.check()
                 yield _sse({"type": "progress", "step": "search", "message": f"搜尋「{q}」中…"})
                 for res in search_all(q, limit=15, pages=pages, area=area):
                     token.check()
                     # 104 已於來源端用 area 篩過；其餘來源在結果端依 location 過濾，地區一致生效。
-                    kept = [j for j in res.jobs
-                            if res.source == "104" or regions.match_location(j.location, region_keys)]
+                    region_kept = [j for j in res.jobs
+                                   if res.source == "104" or regions.match_location(j.location, region_keys)]
+                    region_matched_count += len(region_kept)
+                    kept = _filter_jobs_by_experience(region_kept, max_experience_years)
                     yield _sse({"type": "source", "source": res.source,
                                 "count": len(kept), "blocked": res.blocked})
                     for j in kept:
@@ -481,7 +487,7 @@ def jobs_auto(
 
             # 誠實降級：AI 搜尋零結果 → 告知並改用後備樣本職缺，demo 永遠有東西看。
             used_fallback = False
-            if not resume_jobs:
+            if not resume_jobs and region_matched_count == 0:
                 used_fallback = True
                 yield _sse({"type": "all_blocked",
                             "message": "即時職缺來源暫時取得不到結果，以下改用範例職缺示意，"
@@ -512,6 +518,7 @@ def jobs_auto(
                     found = find_company_jobs(company, profile)
                 except Exception:
                     found = []
+                found = _filter_jobs_by_experience(found, max_experience_years)
                 added = 0
                 for j in found:
                     key = j.url or (j.title + j.company)
@@ -541,6 +548,12 @@ def jobs_auto(
             _finish_task(token)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _filter_jobs_by_experience(jobs: list, max_years: float | None) -> list:
+    if max_years is None:
+        return jobs
+    return [j for j in jobs if j.min_years is None or j.min_years <= max_years]
 
 
 def _load_fallback_jobs() -> list:

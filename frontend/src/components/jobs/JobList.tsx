@@ -5,6 +5,8 @@ import { Card } from "../../ui/Card"
 import { Button } from "../../ui/Button"
 import { Badge } from "../../ui/Badge"
 import { Sparkles, ExternalLink, ChevronLeft, ChevronRight } from "../../ui/icons"
+import { jobExperienceLabel } from "./experience"
+import { getPaginationItems } from "./pagination"
 
 const PAGE_SIZE = 8
 
@@ -26,6 +28,7 @@ function FitBadge({ score }: { score: number }) {
 }
 
 function JobCard({ m, onPick, pending }: { m: JobMatch; onPick: (m: JobMatch) => void; pending?: boolean }) {
+  const exp = jobExperienceLabel(m.job)
   return (
     <Card interactive className="p-4 flex flex-col sm:flex-row gap-4 animate-fade-in-up">
       <FitBadge score={m.fit_score} />
@@ -39,6 +42,7 @@ function JobCard({ m, onPick, pending }: { m: JobMatch; onPick: (m: JobMatch) =>
           {m.job.company}
           {m.job.location ? `｜${m.job.location}` : ""}
           {m.job.salary ? `｜${m.job.salary}` : ""}
+          {exp ? `｜${exp}` : ""}
         </p>
         {m.reason && <p className="text-sm text-slate-700 mt-1">{m.reason}</p>}
         {m.matched.length > 0 && (
@@ -72,6 +76,7 @@ export function JobList({ matches, onPick }:
   }
   const totalPages = Math.max(1, Math.ceil(matches.length / PAGE_SIZE))
   const cur = Math.min(page, totalPages)
+  const pageItems = getPaginationItems(cur, totalPages)
 
   async function handle(m: JobMatch) {
     if (pendingUrl) return  // 已有一張卡在抓 JD/開跑 → 忽略連點，避免同時觸發多條 pipeline
@@ -87,17 +92,28 @@ export function JobList({ matches, onPick }:
         ))}
       </div>
       {matches.length > PAGE_SIZE && (
-        <nav aria-label="職缺分頁" className="flex items-center justify-center gap-1.5 mt-5">
+        <nav aria-label="職缺分頁"
+          className="mt-5 flex flex-wrap items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 shadow-sm">
           <Button variant="secondary" size="sm" icon={ChevronLeft}
-            disabled={cur <= 1} onClick={() => setPage(Math.max(1, cur - 1))}>上一頁</Button>
-          {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
-            <button key={n} onClick={() => setPage(n)} aria-current={n === cur ? "page" : undefined}
-              className={`w-8 h-8 rounded-lg text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${
-                n === cur ? "bg-brand-600 text-white" : "text-slate-600 hover:bg-slate-100"
-              }`}>{n}</button>
-          ))}
-          <Button variant="secondary" size="sm" onClick={() => setPage(Math.min(totalPages, cur + 1))}
-            disabled={cur >= totalPages}>下一頁<ChevronRight className="w-4 h-4" /></Button>
+            aria-label="上一頁" title="上一頁"
+            className="h-9 w-9 px-0" disabled={cur <= 1} onClick={() => setPage(Math.max(1, cur - 1))} />
+          <div className="flex items-center gap-1">
+            {pageItems.map((item, i) => item === "ellipsis" ? (
+              <span key={`ellipsis-${i}`} aria-hidden="true"
+                className="h-9 w-7 grid place-items-center text-sm text-slate-400">…</span>
+            ) : (
+              <button key={item} onClick={() => setPage(item)} aria-current={item === cur ? "page" : undefined}
+                className={`h-9 min-w-9 rounded-md px-2 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${
+                  item === cur ? "bg-brand-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
+                }`}>{item}</button>
+            ))}
+          </div>
+          <Button variant="secondary" size="sm" icon={ChevronRight}
+            aria-label="下一頁" title="下一頁"
+            className="h-9 w-9 px-0" disabled={cur >= totalPages} onClick={() => setPage(Math.min(totalPages, cur + 1))} />
+          <span className="basis-full text-center text-xs text-slate-500 sm:basis-auto sm:min-w-[4.5rem]">
+            第 {cur} / {totalPages} 頁
+          </span>
         </nav>
       )}
     </>

@@ -60,6 +60,14 @@ def _cli_search_paths(name: str) -> list[Path]:
             Path("/opt/homebrew/bin"),
             Path("/usr/bin"),
         ]
+    roots.extend([
+        home / ".volta" / "bin",
+        home / ".asdf" / "shims",
+    ])
+    for root in (home / ".nvm" / "versions" / "node").glob("*"):
+        roots.append(root / "bin")
+    for root in (home / ".local" / "share" / "fnm" / "node-versions").glob("*"):
+        roots.append(root / "installation" / "bin")
     for root in roots:
         for n in names:
             paths.append(root / n)

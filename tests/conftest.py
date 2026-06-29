@@ -35,6 +35,23 @@ def demo_profile() -> Profile:
     return Profile(**data)
 
 
+@pytest.fixture(autouse=True)
+def _avoid_real_backend_probe_in_unit_tests():
+    """Unit tests mock agents/search; do not let local CLI login state decide endpoint results."""
+    try:
+        from app import server as server_mod
+        from app import settings
+    except Exception:
+        yield
+        return
+
+    server_mod.mark_backend_verified(settings.current_backend())
+    try:
+        yield
+    finally:
+        server_mod.mark_backend_unverified()
+
+
 @pytest.fixture
 def sample_parsed_job() -> ParsedJob:
     return ParsedJob(

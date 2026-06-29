@@ -934,6 +934,42 @@ def test_jobs_auto_region_filters_uniformly(monkeypatch):
     assert titles == {"台北職缺", "台北遠端"}            # 台中現場（非-104 外地）被濾掉
 
 
+def test_jobs_auto_filters_jobs_by_max_experience_before_ranking(monkeypatch):
+    """選年資門檻：超過門檻的職缺不送進 AI 排序；未標示年資者保留避免誤殺。"""
+    from app.models import JobMatch, JobPosting, Profile, SearchResult
+    monkeypatch.setattr(server_mod, "structure_profile",
+                        lambda text: Profile(name="王", summary="後端", raw_text=text))
+    monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["Python"])
+    ranked_titles = []
+
+    def fake_search(q, limit=15, pages=1, area=None):
+        return [SearchResult(source="104", jobs=[
+            JobPosting(source="104", title="Junior", company="A", url="u1",
+                       min_years=1, experience_text="1 年以上"),
+            JobPosting(source="104", title="Senior", company="B", url="u2",
+                       min_years=5, experience_text="5 年以上"),
+            JobPosting(source="104", title="Unknown", company="C", url="u3"),
+        ])]
+
+    def fake_rank(profile, jobs, top_k=None):
+        ranked_titles.extend(j.title for j in jobs)
+        return [JobMatch(job=j, fit_score=70) for j in jobs]
+
+    monkeypatch.setattr(server_mod, "search_all", fake_search)
+    monkeypatch.setattr(server_mod, "rank_jobs", fake_rank)
+    client = TestClient(server_mod.app)
+    r = client.post("/api/jobs/auto", data={
+        "resume_text": "Python 後端",
+        "max_experience_years": "2",
+    })
+    events = _parse_sse(r.text)
+
+    assert not any(e["type"] == "error" for e in events)
+    assert ranked_titles == ["Junior", "Unknown"]
+    titles = {m["job"]["title"] for e in events if e["type"] == "ranked_batch" for m in e["data"]}
+    assert titles == {"Junior", "Unknown"}
+
+
 def test_pipeline_chat_resume_applies_update(monkeypatch):
     """履歷對話：AI 給修訂 → 端點回傳 reply + updated{summary,bullets}。"""
     from app.agents import refine as refine_mod
