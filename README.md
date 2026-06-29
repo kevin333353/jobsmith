@@ -10,6 +10,8 @@
 
 預設用你本機的 **Claude Code / Codex CLI 訂閱**當 AI 引擎（**免自行申請 API key**），也能改用 **Ollama / llama.cpp 本機模型**，或**自備金鑰**接任何 OpenAI 相容模型。
 
+**如果這個工具對你找工作或研究 AI Agent 有幫助，歡迎按 Star 支持開源。**
+
 [English](README.en.md) · [**下載（Windows / macOS unsigned）**](#下載) · [快速開始](#快速開始從原始碼) · [系統架構](#系統架構) · [隱私](docs/PRIVACY.md)
 
 ![License](https://img.shields.io/badge/License-Apache_2.0-green)

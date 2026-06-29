@@ -10,6 +10,8 @@ Find jobs, audit your résumé, and generate tailored application packages — r
 
 Runs through your own **Claude Code / Codex CLI** subscription (no separate API key required), **Ollama / llama.cpp local models**, or **bring your own key** for any OpenAI-compatible model.
 
+**If this helps your job search or AI-agent workflow, please consider giving Jobsmith a star.**
+
 [繁體中文](README.md) · [**Download (Windows / unsigned macOS)**](#download) · [Quick Start](#quick-start-from-source) · [Architecture](#architecture) · [Privacy](docs/PRIVACY.md)
 
 ![License](https://img.shields.io/badge/License-Apache_2.0-green)
