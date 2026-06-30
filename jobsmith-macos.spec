@@ -111,8 +111,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleDisplayName": "Jobsmith",
         "CFBundleName": "Jobsmith",
-        "CFBundleShortVersionString": "0.1.2",
-        "CFBundleVersion": "0.1.2",
+        "CFBundleShortVersionString": "0.1.5",
+        "CFBundleVersion": "0.1.5",
         "LSApplicationCategoryType": "public.app-category.productivity",
         "LSMinimumSystemVersion": "12.0",
         "NSHighResolutionCapable": True,
