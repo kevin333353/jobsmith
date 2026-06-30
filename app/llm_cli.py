@@ -91,6 +91,26 @@ def _find_cli(name: str, env_var: str) -> str | None:
     return None
 
 
+def _prepend_cli_dir_to_path(env: dict[str, str], exe: str) -> dict[str, str]:
+    """讓 npm/nvm shim 在 GUI app 子程序中也找得到旁邊的 node。
+
+    macOS app bundle 不會載入 shell profile；即使 `_find_cli()` 掃到
+    `~/.nvm/.../bin/codex`，shim 內的 `#!/usr/bin/env node` 仍會因 child PATH
+    沒有該 bin 而失敗。把 CLI 所在資料夾只加到子程序環境，不污染主程序。
+    """
+    parent = Path(exe).expanduser().parent
+    if str(parent) in ("", "."):
+        return env
+    out = dict(env)
+    path_key = next((key for key in out if key.upper() == "PATH"), "PATH")
+    parts = [part for part in out.get(path_key, "").split(os.pathsep) if part]
+    parent_str = str(parent)
+    if parent_str not in parts:
+        parts.insert(0, parent_str)
+    out[path_key] = os.pathsep.join(parts)
+    return out
+
+
 def _run_process(
     args: list[str],
     *,
@@ -286,6 +306,7 @@ def _run_claude(prompt: str, model: str, allowed_tools: list[str] | None = None,
         raise RuntimeError("找不到 claude CLI，請確認已安裝並在 PATH。")
     env = {k: v for k, v in os.environ.items()
            if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    env = _prepend_cli_dir_to_path(env, exe)
     args = [exe, "-p", _safe_arg(prompt), "--output-format", "json", "--model", model]
     if allowed_tools:
         args += ["--allowedTools", *allowed_tools]
@@ -399,6 +420,7 @@ def _run_codex(prompt: str, timeout: int = _TIMEOUT, extra_args: list[str] | Non
     if not exe:
         raise RuntimeError("找不到 codex CLI，請確認已安裝並在 PATH。")
     env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+    env = _prepend_cli_dir_to_path(env, exe)
     with tempfile.TemporaryDirectory() as td:
         out_file = Path(td) / "last.txt"
         # -o 為 --output-last-message 短旗標：把模型最終訊息寫入檔案，避免混入 agent log

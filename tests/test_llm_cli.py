@@ -318,6 +318,40 @@ def test_run_codex_sends_prompt_via_stdin(monkeypatch):
     assert seen["stdin_text"] == "long prompt"
 
 
+def test_run_codex_adds_cli_directory_to_child_path(tmp_path, monkeypatch):
+    # macOS GUI app 不會載入 shell profile；若 codex 是 nvm/npm shim
+    # (#!/usr/bin/env node)，子程序 PATH 需要包含 shim 所在的 node bin 才找得到 node。
+    seen = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    bin_dir = tmp_path / ".nvm" / "versions" / "node" / "v22.22.1" / "bin"
+    exe = bin_dir / "codex"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+
+    def fake_run(args, **kwargs):
+        seen["args"] = args
+        seen["env"] = kwargs.get("env", {})
+        out_file = args[args.index("-o") + 1]
+        with open(out_file, "w", encoding="utf-8") as f:
+            f.write("ok")
+        return FakeProc()
+
+    monkeypatch.setenv("PATH", "/usr/bin" + cli.os.pathsep + "/bin")
+    monkeypatch.setattr(cli, "_find_cli", lambda name, env_var: str(exe))
+    monkeypatch.setattr(cli, "_run_process", fake_run)
+
+    cli._run_codex("hello")
+
+    child_path = seen["env"]["PATH"].split(cli.os.pathsep)
+    assert child_path[0] == str(bin_dir)
+    assert str(bin_dir) in child_path
+
+
 def test_find_cli_prefers_env_override(monkeypatch):
     monkeypatch.setenv("CLAUDE_CLI_PATH", "/custom/claude")
     monkeypatch.setattr(cli.shutil, "which", lambda n: "/on/path/claude")

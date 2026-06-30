@@ -47,6 +47,7 @@ body:
       label: How are you running Jobsmith?
       options:
         - Windows exe from GitHub Releases
+        - macOS unsigned DMG from GitHub Releases
         - From source with desktop.bat
         - From source with run.bat / web mode
         - CLI mode
