@@ -4,7 +4,15 @@ from __future__ import annotations
 from urllib.parse import quote
 
 from app.models import JobPosting, SearchResult
-from app.sources.base import clean, http_get
+from app.sources.base import UA, clean, http_get
+
+# curl_cffi is optional; used only as a fallback when 104 returns 403 (Cloudflare).
+try:
+    from curl_cffi import requests as _cf_requests
+    _CF_AVAILABLE = True
+except ImportError:
+    _cf_requests = None  # type: ignore[assignment]
+    _CF_AVAILABLE = False
 
 NAME = "104"
 SEARCHABLE = True
@@ -44,19 +52,33 @@ def _format_salary(d: dict) -> str | None:
     return f"{label} {amount}".strip()
 
 
+def _cf_get(url: str):
+    """curl_cffi fallback: impersonates Chrome TLS to bypass Cloudflare (403 only)."""
+    return _cf_requests.get(
+        url,
+        headers={"User-Agent": UA, "Referer": _REFERER, "Accept-Language": "zh-TW,zh;q=0.9"},
+        impersonate="chrome124",
+        timeout=20,
+    )
+
+
 def search(keywords: str, limit: int = 15, pages: int = 1,
            area: list[str] | None = None) -> SearchResult:
     """搜尋 104；pages>1 時逐頁抓取（API 吃 page 參數）並跨頁去重。
 
     area：104 地區代碼清單（來源端篩選，逗號串接帶入 &area=）；空則不限地區。
     blocked 僅看第一頁：第一頁失敗才降級；後續頁失敗就停在已收到的結果。
+    403 fallback：若 requests 回 403 且 curl_cffi 可用，自動重試一次。
     """
     jobs: list[JobPosting] = []
     seen: set[str] = set()
     area_q = ("&area=" + quote(",".join(area))) if area else ""
     for page in range(1, max(1, pages) + 1):
+        url = _API.format(kw=quote(keywords), page=page) + area_q
         try:
-            r = http_get(_API.format(kw=quote(keywords), page=page) + area_q, referer=_REFERER)
+            r = http_get(url, referer=_REFERER)
+            if r.status_code == 403 and _CF_AVAILABLE:
+                r = _cf_get(url)
             if not r.ok:
                 if page == 1:
                     return SearchResult(source=NAME, blocked=True, error=f"HTTP {r.status_code}")
