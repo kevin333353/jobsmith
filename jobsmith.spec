@@ -4,11 +4,20 @@
 建置： .venv\\Scripts\\pyinstaller.exe jobcopilot.spec --noconfirm
 產物： dist\\JobCopilot.exe（單一檔，雙擊啟動、開瀏覽器）。
 """
+import sys
+
 from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+from packaging_support import conda_runtime_binaries
 
 datas = []
 binaries = []
 hiddenimports = []
+
+# A venv created from conda Python keeps extension modules in the base prefix,
+# while their dependent DLLs live in Library/bin. PyInstaller does not detect
+# that layout when the venv itself has no conda-meta directory.
+binaries += conda_runtime_binaries(sys.base_prefix)
 
 # 唯讀資源：前端建置產物 + demo/fallback 資料（不打包 *.sqlite 等可寫入檔）。
 datas += [
