@@ -2,6 +2,7 @@ import subprocess
 import threading
 
 import pytest
+
 from app import server as server_mod
 from app.models import Profile
 from tests.client import TestClient

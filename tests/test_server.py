@@ -1,7 +1,5 @@
 import json
 
-from tests.client import TestClient
-
 from app import graph as graph_mod
 from app import server as server_mod
 from app.models import (
@@ -14,6 +12,7 @@ from app.models import (
     SupervisorDecision,
     TailoredResume,
 )
+from tests.client import TestClient
 from tests.conftest import FakeLLM
 
 
