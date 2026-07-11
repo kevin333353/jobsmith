@@ -1,4 +1,4 @@
-"""Yourator：v4 jobs JSON API。本環境憑證鏈驗不過，故 verify=False 取公開資料。"""
+"""Yourator：v4 jobs JSON API；TLS 驗證失敗時安全降級為 blocked。"""
 from __future__ import annotations
 
 from urllib.parse import quote
@@ -21,7 +21,7 @@ def search(keywords: str, limit: int = 15, pages: int = 1,
     seen: set[str] = set()
     for page in range(1, max(1, pages) + 1):
         try:
-            r = http_get(_API.format(kw=quote(keywords), page=page), verify=False)
+            r = http_get(_API.format(kw=quote(keywords), page=page))
             if not r.ok:
                 if page == 1:
                     return SearchResult(source=NAME, blocked=True, error=f"HTTP {r.status_code}")

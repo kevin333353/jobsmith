@@ -1,3 +1,6 @@
+import pytest
+import requests
+
 from app.sources import source_104, source_cake, source_linkedin, source_yourator
 
 
@@ -12,6 +15,23 @@ class FakeResp:
         if self._json is None:
             raise ValueError("no json")
         return self._json
+
+
+@pytest.mark.parametrize("source", [source_linkedin, source_yourator, source_cake])
+def test_public_sources_never_disable_tls_verification(monkeypatch, source):
+    calls = []
+
+    def fail_tls(*args, **kwargs):
+        calls.append(kwargs)
+        raise requests.exceptions.SSLError("untrusted certificate")
+
+    monkeypatch.setattr(source, "http_get", fail_tls)
+
+    result = source.search("python", limit=1, pages=1)
+
+    assert calls and all("verify" not in kwargs for kwargs in calls)
+    assert result.blocked is True
+    assert result.jobs == []
 
 
 def test_source_104_parses(monkeypatch):

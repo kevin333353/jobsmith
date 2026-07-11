@@ -1,7 +1,7 @@
 """Cake（cake.me）：解析搜尋頁 __NEXT_DATA__ 的 initialState.jobSearch.entityByPathId。
 
 Cake 已改用 Algolia client-side 搜尋，但 SSR 仍把首頁結果放進 __NEXT_DATA__ 的
-initialState.jobSearch.entityByPathId（slug -> 職缺）。本機憑證鏈問題用 verify=False；失敗即降級。
+initialState.jobSearch.entityByPathId（slug -> 職缺）。TLS 驗證失敗即安全降級。
 """
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def search(keywords: str, limit: int = 15, pages: int = 1,
     first_error = None
     for pg in range(1, max(1, pages) + 1):
         try:
-            r = http_get(_PAGE.format(kw=quote(keywords), page=pg), verify=False)
+            r = http_get(_PAGE.format(kw=quote(keywords), page=pg))
             if not r.ok:
                 first_error = f"HTTP {r.status_code}"
                 break

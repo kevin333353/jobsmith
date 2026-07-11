@@ -1,7 +1,7 @@
 """LinkedIn：免登入 guest jobs API（低頻、personal 用，與 104 同立場）。
 
 端點 jobs-guest/.../seeMoreJobPostings/search 回傳職缺卡 HTML，免登入。
-本機對 linkedin.com 憑證鏈驗證失敗（同 yourator/cake），故 verify=False 取公開唯讀資料。
+TLS 憑證驗證失敗時回 blocked，不使用未驗證連線。
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def search(keywords: str, limit: int = 15, pages: int = 1,
     cap = limit * max(1, pages)  # 總筆數上限，與其他來源的 limit×pages 一致
     for page in range(max(1, pages)):
         try:
-            r = http_get(_API.format(kw=quote(keywords), start=page * _PER_PAGE), verify=False)
+            r = http_get(_API.format(kw=quote(keywords), start=page * _PER_PAGE))
             if not r.ok:
                 if page == 0:
                     return SearchResult(source=NAME, blocked=True, error=f"HTTP {r.status_code}")
