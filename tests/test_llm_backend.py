@@ -39,6 +39,17 @@ def test_set_backend_switches_at_runtime(monkeypatch):
     assert isinstance(llm_mod.get_llm("standard"), CodexCLIChat)
 
 
+def test_backend_snapshot_is_stable_while_global_selection_changes(monkeypatch):
+    _reload(monkeypatch, "claude_cli")
+    snapshot = settings_mod.capture_backend_snapshot()
+
+    settings_mod.set_backend("codex_cli")
+
+    with settings_mod.backend_context(snapshot):
+        assert settings_mod.current_backend() == "claude_cli"
+    assert settings_mod.current_backend() == "codex_cli"
+
+
 def test_set_backend_rejects_unsupported(monkeypatch):
     import pytest
     _reload(monkeypatch, "claude_cli")

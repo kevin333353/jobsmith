@@ -1,6 +1,10 @@
 """集中管理環境變數、模型分層、與『可切換的 LLM 後端』。"""
+import contextlib
+import contextvars
 import os
 import re
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -48,7 +52,8 @@ _current_backend: str = os.environ.get("LLM_BACKEND", "claude_cli")
 
 def current_backend() -> str:
     """目前作用中的 LLM 後端。"""
-    return _current_backend
+    snapshot = _BACKEND_CONTEXT.get()
+    return snapshot.backend if snapshot is not None else _current_backend
 
 
 def set_backend(name: str, *, persist: bool = False) -> None:
@@ -74,6 +79,12 @@ _cli_model: dict[str, str] = {"claude_cli": "auto", "codex_cli": "auto"}
 
 def cli_model(backend: str) -> str:
     """該 CLI 後端目前選的模型（'auto' = 自動分層）。"""
+    snapshot = _BACKEND_CONTEXT.get()
+    if snapshot is not None:
+        if backend == "claude_cli":
+            return snapshot.claude_cli_model
+        if backend == "codex_cli":
+            return snapshot.codex_cli_model
     return _cli_model.get(backend, "auto")
 
 
@@ -138,21 +149,89 @@ def _initial_local_model() -> dict[str, str]:
 _local_model: dict[str, str] = _initial_local_model()
 
 
+@dataclass(frozen=True)
+class BackendSnapshot:
+    """Immutable provider configuration captured for one background pipeline."""
+
+    backend: str
+    claude_cli_model: str
+    codex_cli_model: str
+    byok_base_url: str
+    byok_api_key: str
+    byok_model: str
+    local_provider: str
+    local_base_url: str
+    local_api_key: str
+    local_model: str
+
+
+_BACKEND_CONTEXT: contextvars.ContextVar[BackendSnapshot | None] = contextvars.ContextVar(
+    "jobsmith_backend_snapshot",
+    default=None,
+)
+
+
+def _global_local_base_url() -> str:
+    return _local_model["base_url"] or _local_model_default_base_url(_local_model["provider"])
+
+
+def _global_local_api_key() -> str:
+    if _local_model["api_key"]:
+        return _local_model["api_key"]
+    if _local_model["provider"] == "ollama":
+        return "ollama"
+    if _local_model["provider"] == "llama_cpp":
+        return "llama.cpp"
+    return "local"
+
+
+def capture_backend_snapshot() -> BackendSnapshot:
+    """Freeze every UI-mutable backend setting for a new unit of work."""
+    active = _BACKEND_CONTEXT.get()
+    if active is not None:
+        return active
+    return BackendSnapshot(
+        backend=_current_backend,
+        claude_cli_model=_cli_model["claude_cli"],
+        codex_cli_model=_cli_model["codex_cli"],
+        byok_base_url=_byok["base_url"],
+        byok_api_key=_byok["api_key"],
+        byok_model=_byok["model"],
+        local_provider=_local_model["provider"],
+        local_base_url=_global_local_base_url(),
+        local_api_key=_global_local_api_key(),
+        local_model=_local_model["model"],
+    )
+
+
+@contextlib.contextmanager
+def backend_context(snapshot: BackendSnapshot) -> Iterator[None]:
+    """Make settings accessors resolve against one immutable snapshot."""
+    marker = _BACKEND_CONTEXT.set(snapshot)
+    try:
+        yield
+    finally:
+        _BACKEND_CONTEXT.reset(marker)
+
+
 def _env_file() -> Path:
     """.env 路徑（測試可用 COPILOT_ENV_FILE 改指向暫存檔，避免動到真檔）。"""
     return Path(os.environ.get("COPILOT_ENV_FILE") or _ENV_DEFAULT)
 
 
 def byok_base_url() -> str:
-    return _byok["base_url"]
+    snapshot = _BACKEND_CONTEXT.get()
+    return snapshot.byok_base_url if snapshot is not None else _byok["base_url"]
 
 
 def byok_api_key() -> str:
-    return _byok["api_key"]
+    snapshot = _BACKEND_CONTEXT.get()
+    return snapshot.byok_api_key if snapshot is not None else _byok["api_key"]
 
 
 def byok_model() -> str:
-    return _byok["model"]
+    snapshot = _BACKEND_CONTEXT.get()
+    return snapshot.byok_model if snapshot is not None else _byok["model"]
 
 
 def byok_public() -> dict:
@@ -165,26 +244,23 @@ def byok_public() -> dict:
 
 
 def local_model_provider() -> str:
-    return _local_model["provider"]
+    snapshot = _BACKEND_CONTEXT.get()
+    return snapshot.local_provider if snapshot is not None else _local_model["provider"]
 
 
 def local_model_base_url() -> str:
-    return _local_model["base_url"] or _local_model_default_base_url(_local_model["provider"])
+    snapshot = _BACKEND_CONTEXT.get()
+    return snapshot.local_base_url if snapshot is not None else _global_local_base_url()
 
 
 def local_model_api_key() -> str:
-    if _local_model["api_key"]:
-        return _local_model["api_key"]
-    provider = _local_model["provider"]
-    if provider == "ollama":
-        return "ollama"
-    if provider == "llama_cpp":
-        return "llama.cpp"
-    return "local"
+    snapshot = _BACKEND_CONTEXT.get()
+    return snapshot.local_api_key if snapshot is not None else _global_local_api_key()
 
 
 def local_model_model() -> str:
-    return _local_model["model"]
+    snapshot = _BACKEND_CONTEXT.get()
+    return snapshot.local_model if snapshot is not None else _local_model["model"]
 
 
 def local_model_public() -> dict:

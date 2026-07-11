@@ -178,6 +178,7 @@ class _Run:
     def __init__(self, thread_id: str, package_id: int):
         self.thread_id = thread_id
         self.package_id = package_id
+        self.backend_snapshot = settings.capture_backend_snapshot()
         self.events: list[dict] = []
         self.done = False
         self.cancel_requested = False
@@ -228,6 +229,12 @@ def _jd_title(jd_text: str) -> str:
 
 
 def _run_pipeline_bg(run: "_Run", initial: dict, config: dict, graph) -> None:
+    """Run under the immutable provider configuration captured at creation."""
+    with settings.backend_context(run.backend_snapshot):
+        _run_pipeline_bg_inner(run, initial, config, graph)
+
+
+def _run_pipeline_bg_inner(run: "_Run", initial: dict, config: dict, graph) -> None:
     """背景執行緒跑整張 graph（每個產生用自己的 graph，可平行）：逐節點把事件寫進 run 緩衝，
     跑完更新歷史那筆為 done。"""
     try:

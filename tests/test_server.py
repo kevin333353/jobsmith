@@ -172,6 +172,42 @@ def _parse_sse(text: str) -> list[dict]:
     return events
 
 
+def test_background_run_captures_backend_at_creation(monkeypatch):
+    from app import settings
+
+    settings.set_backend("claude_cli")
+    run = server_mod._Run("snapshot-run", 1)
+
+    settings.set_backend("codex_cli")
+
+    assert run.backend_snapshot.backend == "claude_cli"
+
+
+def test_background_run_executes_inside_captured_backend(monkeypatch):
+    from types import SimpleNamespace
+
+    from app import settings
+
+    seen = []
+
+    class FakeGraph:
+        def stream(self, initial, config, stream_mode):
+            seen.append(settings.current_backend())
+            return iter(())
+
+        def get_state(self, config):
+            return SimpleNamespace(values={})
+
+    settings.set_backend("claude_cli")
+    run = server_mod._Run("snapshot-context-run", 1)
+    settings.set_backend("codex_cli")
+    monkeypatch.setattr(server_mod._history, "update_package_result", lambda *args: None)
+
+    server_mod._run_pipeline_bg(run, {}, {}, FakeGraph())
+
+    assert seen == ["claude_cli"]
+
+
 def test_sample_endpoint():
     client = TestClient(server_mod.app)
     r = client.get("/api/sample")
