@@ -14,7 +14,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from app import telemetry
+from app import task_control, telemetry
 from app.agents.company import research_company
 from app.agents.cover_letter import write_cover_letter
 from app.agents.critic import critique_package
@@ -49,10 +49,14 @@ def _safe(state: CopilotState, node: str, key: str, fn, fallback):
     token = telemetry.begin_node()
     t0 = time.perf_counter()
     try:
-        out = {key: fn()}
-    except Exception as exc:  # noqa: BLE001 — 任何 agent 例外都要優雅降級
-        out = {key: fallback, "errors": [{"node": node, "message": str(exc)[:200]}]}
-    usage = telemetry.end_node(token)
+        try:
+            out = {key: fn()}
+        except task_control.TaskCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 — 任何 agent 例外都要優雅降級
+            out = {key: fallback, "errors": [{"node": node, "message": str(exc)[:200]}]}
+    finally:
+        usage = telemetry.end_node(token)
     out["telemetry"] = [{"node": node,
                          "latency_ms": int((time.perf_counter() - t0) * 1000),
                          **usage}]

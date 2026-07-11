@@ -239,3 +239,37 @@ def test_api_structured_wrapper_reports_empty_response():
     with pytest.raises(LLMResponseFormatError) as ei:
         wrapped.with_structured_output(Toy).invoke([("human", "h")])
     assert "回覆空白" in str(ei.value)
+
+
+def test_api_chat_wrapper_checks_cancellation_before_provider_call():
+    from app import task_control
+
+    class FailIfCalled:
+        def invoke(self, messages):
+            raise AssertionError("provider must not be called after cancellation")
+
+    token = task_control.create_task("api-wrapper-cancel")
+    token.cancel()
+    wrapped = llm_mod._FriendlyStructuredChat(FailIfCalled(), "openai")
+    try:
+        with task_control.task_context(token), pytest.raises(task_control.TaskCancelled):
+            wrapped.invoke([("human", "secret resume")])
+    finally:
+        task_control.finish_task(token.task_id)
+
+
+def test_api_structured_wrapper_checks_cancellation_before_provider_call():
+    from app import task_control
+
+    class FailIfCalled:
+        def invoke(self, messages):
+            raise AssertionError("provider must not be called after cancellation")
+
+    token = task_control.create_task("api-structured-cancel")
+    token.cancel()
+    wrapped = llm_mod._FriendlyStructured(FailIfCalled(), Toy, "openai")
+    try:
+        with task_control.task_context(token), pytest.raises(task_control.TaskCancelled):
+            wrapped.invoke([("human", "secret resume")])
+    finally:
+        task_control.finish_task(token.task_id)

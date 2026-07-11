@@ -1,3 +1,6 @@
+import subprocess
+import threading
+
 import pytest
 from app import server as server_mod
 from app.models import Profile
@@ -26,6 +29,64 @@ def test_task_stop_endpoint_marks_task_cancelled():
     assert r.json()["status"] == "stopped"
     assert token.is_cancelled()
     task_control.finish_task("unit-stop")
+
+
+def test_background_stop_cancels_run_token():
+    run = server_mod._Run("cancel-run", 1)
+
+    run.request_stop()
+
+    assert run.token.is_cancelled()
+
+
+def test_background_stop_terminates_active_cli_process(monkeypatch):
+    import app.llm_cli as cli
+
+    started = threading.Event()
+    terminated = threading.Event()
+    killed = threading.Event()
+
+    class FakeProcess:
+        returncode = 0
+        stdin = None
+
+        def communicate(self, timeout=None):
+            started.set()
+            if terminated.is_set() or killed.is_set():
+                return "", ""
+            raise subprocess.TimeoutExpired("fake-cli", timeout)
+
+        def terminate(self):
+            terminated.set()
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            killed.set()
+
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(server_mod._history, "set_status", lambda *args: None)
+
+    class CLIBlockingGraph:
+        def stream(self, initial, config, stream_mode):
+            cli._run_process(["fake-cli"], env={}, timeout=1)
+            return iter(())
+
+    run = server_mod._Run("active-cli-run", 1)
+    worker = threading.Thread(
+        target=server_mod._run_pipeline_bg,
+        args=(run, {}, {}, CLIBlockingGraph()),
+    )
+    worker.start()
+    assert started.wait(1)
+
+    run.request_stop()
+    worker.join(2)
+
+    assert not worker.is_alive()
+    assert terminated.is_set()
+    assert not killed.is_set()
 
 
 def test_resume_evaluate_stops_after_profile_phase(monkeypatch):

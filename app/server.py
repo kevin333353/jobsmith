@@ -179,6 +179,7 @@ class _Run:
         self.thread_id = thread_id
         self.package_id = package_id
         self.backend_snapshot = settings.capture_backend_snapshot()
+        self.token = task_control.TaskToken(f"run:{thread_id}")
         self.events: list[dict] = []
         self.done = False
         self.cancel_requested = False
@@ -196,6 +197,7 @@ class _Run:
             self.done = True
 
     def request_stop(self, message: str = "已停止任務") -> None:
+        self.token.cancel()
         with self._lock:
             self.cancel_requested = True
             if not any(ev.get("type") == "stopped" for ev in self.events):
@@ -230,7 +232,7 @@ def _jd_title(jd_text: str) -> str:
 
 def _run_pipeline_bg(run: "_Run", initial: dict, config: dict, graph) -> None:
     """Run under the immutable provider configuration captured at creation."""
-    with settings.backend_context(run.backend_snapshot):
+    with settings.backend_context(run.backend_snapshot), task_control.task_context(run.token):
         _run_pipeline_bg_inner(run, initial, config, graph)
 
 
@@ -238,7 +240,9 @@ def _run_pipeline_bg_inner(run: "_Run", initial: dict, config: dict, graph) -> N
     """背景執行緒跑整張 graph（每個產生用自己的 graph，可平行）：逐節點把事件寫進 run 緩衝，
     跑完更新歷史那筆為 done。"""
     try:
+        run.token.check()
         for chunk in graph.stream(initial, config, stream_mode="updates"):
+            run.token.check()
             if run.is_cancelled():
                 _history.set_status(run.package_id, "stopped")
                 return
@@ -258,8 +262,10 @@ def _run_pipeline_bg_inner(run: "_Run", initial: dict, config: dict, graph) -> N
         if run.is_cancelled():
             _history.set_status(run.package_id, "stopped")
             return
+        run.token.check()
         snapshot = graph.get_state(config)
         final = serialize_update(snapshot.values)
+        run.token.check()
         _history.update_package_result(run.package_id, final)
         run.emit({"type": "done", "package_id": run.package_id})
     except Exception as exc:  # noqa: BLE001 — 背景出錯也要收尾，不讓那筆永遠卡「進行中」
@@ -1246,8 +1252,6 @@ def run(body: RunBody):
 
     thread_id = uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
-    pid = _history.create_running_package(
-        thread_id, body.jd_text, _jd_title(body.jd_text), profile.model_dump())
     initial = {
         "jd_text": body.jd_text, "profile": profile,
         "parsed_job": None, "match_report": None, "supervisor_decision": None,
@@ -1256,16 +1260,20 @@ def run(body: RunBody):
         # batch=True：背景跑、略過互動核可關卡（核可改到「我的投遞包」做）。
         "approved": None, "batch": True, "errors": [], "telemetry": [],
     }
-    run_obj = _Run(thread_id, pid)
-    # 沒帶真實履歷 → 用範例 demo，明確提醒使用者（避免把假人投遞包當成自己的）。
-    if not body.profile:
-        run_obj.emit({"type": "profile_warning",
-                      "message": "目前使用範例履歷示意（非你本人背景）。"
-                                 "請先到「自動找職缺」或「履歷健檢」提供你的履歷，再產生個人化投遞包。"})
     with _RUNS_LOCK:
+        # 與 privacy clear 共用同一把鎖：不可在清除途中建立未被取消的新 run。
+        pid = _history.create_running_package(
+            thread_id, body.jd_text, _jd_title(body.jd_text), profile.model_dump())
+        run_obj = _Run(thread_id, pid)
+        # 沒帶真實履歷 → 用範例 demo，明確提醒使用者（避免把假人投遞包當成自己的）。
+        if not body.profile:
+            run_obj.emit({"type": "profile_warning",
+                          "message": "目前使用範例履歷示意（非你本人背景）。"
+                                     "請先到「自動找職缺」或「履歷健檢」提供你的履歷，再產生個人化投遞包。"})
         _prune_runs()
         _RUNS[thread_id] = run_obj
-    run_obj.future = _RUN_EXECUTOR.submit(_run_pipeline_bg, run_obj, initial, config, _new_run_graph())
+        run_obj.future = _RUN_EXECUTOR.submit(
+            _run_pipeline_bg, run_obj, initial, config, _new_run_graph())
     return {"thread_id": thread_id, "package_id": pid}
 
 
@@ -1347,12 +1355,18 @@ def memory_profile_delete():
 @app.delete("/api/privacy-data")
 def privacy_data_delete():
     """Clear locally stored resume/profile data, saved searches, and generated packages."""
-    _memory.clear_memory()
-    _searches.delete_all_searches()
-    _resume_checks.delete_all_checks()
-    _history.delete_all_packages()
     with _RUNS_LOCK:
+        runs = list(_RUNS.values())
+        for run_obj in runs:
+            run_obj.request_stop("清除個人資料，已停止任務")
+            if run_obj.future is not None:
+                run_obj.future.cancel()
         _RUNS.clear()
+        # Keep deletion in the same critical section so a new run can only be created afterwards.
+        _memory.clear_memory()
+        _searches.delete_all_searches()
+        _resume_checks.delete_all_checks()
+        _history.delete_all_packages()
     return {"ok": True}
 
 

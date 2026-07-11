@@ -4,7 +4,7 @@
 - claude_cli / codex_cli：本機 CLI 訂閱（免 API key、不吃額度）——使用者可在 UI 切換（主要）。
 - anthropic：API key（雲端/部署用，可選）。
 """
-from app import settings
+from app import settings, task_control
 from app.llm_errors import ensure_structured_result, normalize_structured_exception
 from app.settings import get_model
 
@@ -16,11 +16,15 @@ class _FriendlyStructured:
         self._backend_label = backend_label
 
     def invoke(self, messages):
+        task_control.check_cancelled()
         try:
             result = self._inner.invoke(messages)
+        except task_control.TaskCancelled:
+            raise
         except Exception as exc:
             normalized = normalize_structured_exception(self._backend_label, exc)
             raise normalized from exc
+        task_control.check_cancelled()
         return ensure_structured_result(
             self._schema,
             result,
@@ -43,7 +47,10 @@ class _FriendlyStructuredChat:
         )
 
     def invoke(self, messages):
-        return self._inner.invoke(messages)
+        task_control.check_cancelled()
+        result = self._inner.invoke(messages)
+        task_control.check_cancelled()
+        return result
 
     def __getattr__(self, name):
         return getattr(self._inner, name)

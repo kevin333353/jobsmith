@@ -1,4 +1,6 @@
 import json
+import threading
+from types import SimpleNamespace
 
 from app import server as server_mod
 from app.models import Profile, ResumeAssessment
@@ -154,6 +156,121 @@ def test_privacy_clear_removes_saved_personal_data():
     assert server_mod._searches.list_searches() == []
     assert server_mod._resume_checks.list_checks() == []
     assert server_mod._history.list_packages() == []
+
+
+def test_privacy_clear_cancels_active_runs_before_deleting(monkeypatch):
+    run = server_mod._Run("privacy-run", 42)
+    with server_mod._RUNS_LOCK:
+        server_mod._RUNS[run.thread_id] = run
+
+    for obj, name in (
+        (server_mod._memory, "clear_memory"),
+        (server_mod._searches, "delete_all_searches"),
+        (server_mod._resume_checks, "delete_all_checks"),
+        (server_mod._history, "delete_all_packages"),
+    ):
+        monkeypatch.setattr(obj, name, lambda: None)
+
+    response = TestClient(server_mod.app).delete("/api/privacy-data")
+
+    assert response.status_code == 200
+    assert run.token.is_cancelled()
+    assert run.thread_id not in server_mod._RUNS
+
+
+def test_privacy_clear_prevents_worker_post_clear_write(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    writes = []
+
+    class BlockingGraph:
+        def stream(self, initial, config, stream_mode):
+            started.set()
+            release.wait(2)
+            yield {"parse": {}}
+
+        def get_state(self, config):
+            return SimpleNamespace(values={})
+
+    for obj, name in (
+        (server_mod._memory, "clear_memory"),
+        (server_mod._searches, "delete_all_searches"),
+        (server_mod._resume_checks, "delete_all_checks"),
+        (server_mod._history, "delete_all_packages"),
+    ):
+        monkeypatch.setattr(obj, name, lambda: None)
+    monkeypatch.setattr(
+        server_mod._history,
+        "update_package_result",
+        lambda pid, final: writes.append((pid, final)),
+    )
+    monkeypatch.setattr(server_mod._history, "set_status", lambda *args: None)
+
+    run = server_mod._Run("privacy-worker", 42)
+    with server_mod._RUNS_LOCK:
+        server_mod._RUNS[run.thread_id] = run
+    worker = threading.Thread(
+        target=server_mod._run_pipeline_bg,
+        args=(run, {}, {}, BlockingGraph()),
+    )
+    worker.start()
+    assert started.wait(1)
+
+    response = TestClient(server_mod.app).delete("/api/privacy-data")
+    release.set()
+    worker.join(2)
+
+    assert response.status_code == 200
+    assert not worker.is_alive()
+    assert writes == []
+
+
+def test_privacy_clear_holds_run_lock_through_data_deletion(monkeypatch):
+    lock_was_held = []
+
+    def observe_lock():
+        acquired = server_mod._RUNS_LOCK.acquire(blocking=False)
+        lock_was_held.append(not acquired)
+        if acquired:
+            server_mod._RUNS_LOCK.release()
+
+    monkeypatch.setattr(server_mod._memory, "clear_memory", observe_lock)
+    monkeypatch.setattr(server_mod._searches, "delete_all_searches", lambda: None)
+    monkeypatch.setattr(server_mod._resume_checks, "delete_all_checks", lambda: None)
+    monkeypatch.setattr(server_mod._history, "delete_all_packages", lambda: None)
+
+    response = TestClient(server_mod.app).delete("/api/privacy-data")
+
+    assert response.status_code == 200
+    assert lock_was_held == [True]
+
+
+def test_run_creation_is_serialized_with_privacy_clear(monkeypatch):
+    lock_was_held = []
+
+    def create_package(*args, **kwargs):
+        acquired = server_mod._RUNS_LOCK.acquire(blocking=False)
+        lock_was_held.append(not acquired)
+        if acquired:
+            server_mod._RUNS_LOCK.release()
+        return 123
+
+    class FakeFuture:
+        def cancel(self):
+            return True
+
+    monkeypatch.setattr(server_mod._history, "create_running_package", create_package)
+    monkeypatch.setattr(server_mod, "_new_run_graph", lambda: object())
+    monkeypatch.setattr(server_mod._RUN_EXECUTOR, "submit", lambda *args: FakeFuture())
+
+    result = server_mod.run(server_mod.RunBody(
+        jd_text="private jd",
+        profile={"name": "Private User", "summary": "Engineer"},
+    ))
+    with server_mod._RUNS_LOCK:
+        server_mod._RUNS.pop(result["thread_id"], None)
+
+    assert lock_was_held == [True]
 
 
 def test_diagnostics_returns_fixed_error_log_location():

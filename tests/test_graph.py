@@ -1,3 +1,4 @@
+import pytest
 from langgraph.types import Command
 
 from app import graph as graph_mod
@@ -13,6 +14,16 @@ from app.models import (
 )
 
 CONFIG = {"configurable": {"thread_id": "test-thread"}}
+
+
+def test_safe_does_not_swallow_task_cancellation():
+    from app import task_control
+
+    def cancelled():
+        raise task_control.TaskCancelled("stop")
+
+    with pytest.raises(task_control.TaskCancelled):
+        graph_mod._safe({}, "parse", "parsed_job", cancelled, None)
 
 
 def _patch_supervisor(monkeypatch):
