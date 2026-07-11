@@ -1,8 +1,7 @@
 import pytest
-from fastapi.testclient import TestClient
-
 from app import server as server_mod
 from app.models import Profile
+from tests.client import TestClient
 
 
 def _parse_sse(text: str) -> list[dict]:

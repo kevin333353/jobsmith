@@ -16,7 +16,7 @@ The work is split into independent components with regression tests at each boun
 
 The server owns one high-entropy, process-local session secret. It is generated with `secrets.token_urlsafe()` at startup and is never written to SQLite, `.env`, logs, or local storage.
 
-`TrustedHostMiddleware` accepts only `127.0.0.1`, `localhost`, and the test-only host used by Starlette's in-process client. A custom middleware protects `/api/*` routes:
+`TrustedHostMiddleware` accepts only `127.0.0.1` and `localhost`. Tests use `localhost` as their in-process base URL instead of widening the production allowlist. A custom middleware protects `/api/*` routes:
 
 - Requests with an `Origin` header must originate from loopback HTTP(S).
 - API requests require the process session cookie, compared with `secrets.compare_digest()`.
@@ -77,4 +77,3 @@ The implementation is complete only when all of the following pass:
 - `npm run lint` and `npm run build`.
 - `pip check` and `npm audit --audit-level=high`.
 - Manual smoke request proving an attacker-controlled Host cannot read `/api/memory`.
-

@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__, settings, task_control
 from app.agents.company_jobs import find_company_jobs
@@ -27,6 +28,12 @@ from app.cli import load_profile
 from app.graph import build_graph
 from app.intake.resume_parser import extract_text
 from app.models import Profile
+from app.security import (
+    ALLOWED_HOSTS,
+    LocalAPISecurityMiddleware,
+    new_api_token,
+    set_session_cookie,
+)
 from app.sources import regions
 from app.sources.registry import linkedin_search_url, search_all
 from app.sources.salary import filter_jobs_by_salary, monthly_salary_bounds
@@ -36,7 +43,11 @@ from app.store import memory as _memory
 from app.store import resume_checks as _resume_checks
 from app.store import searches as _searches
 
+_API_TOKEN = new_api_token()
 app = FastAPI(title="Jobsmith")
+# add_middleware() inserts at the front; add TrustedHost last so it is the outer boundary.
+app.add_middleware(LocalAPISecurityMiddleware, token=_API_TOKEN)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(ALLOWED_HOSTS))
 
 _appdb.init_db()  # 應用層 sqlite（歷史/記憶）
 _history.mark_stale_running_failed()  # 啟動時把上次殘留的「進行中」收尾為 failed
@@ -54,6 +65,12 @@ if (_FRONTEND_DIST / "assets").is_dir():
 
 _ERROR_LOG = _ROOT / "data" / "error.log"
 _MAX_RESUME_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
+@app.get("/api/session")
+def api_session():
+    """Bootstrap the process-local HttpOnly API session cookie."""
+    return set_session_cookie(JSONResponse({"ok": True}), _API_TOKEN)
 
 
 def _open_folder(path: Path) -> None:
@@ -1430,7 +1447,8 @@ def searches_delete(sid: int):
 def index():
     dist_index = _FRONTEND_DIST / "index.html"
     if dist_index.exists():
-        return dist_index.read_text(encoding="utf-8")
+        response = HTMLResponse(dist_index.read_text(encoding="utf-8"))
+        return set_session_cookie(response, _API_TOKEN)
     return HTMLResponse(
         "<h1>前端尚未建置</h1><p>請先執行 <code>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</code>，"
         "再重新整理。</p>", status_code=503)

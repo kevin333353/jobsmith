@@ -1,9 +1,45 @@
 import json
 
-from fastapi.testclient import TestClient
-
 from app import server as server_mod
 from app.models import Profile, ResumeAssessment
+from tests.client import RawTestClient, TestClient
+
+
+def test_api_rejects_attacker_host():
+    client = RawTestClient(server_mod.app)
+    r = client.get("/api/memory", headers={"Host": "attacker.example:8000"})
+
+    assert r.status_code == 400
+
+
+def test_api_requires_process_session_cookie():
+    client = RawTestClient(server_mod.app)
+
+    assert client.get("/api/memory").status_code == 403
+    client.cookies.set("jobsmith_session", "wrong", path="/api")
+    assert client.get("/api/memory").status_code == 403
+
+
+def test_api_rejects_non_loopback_origin():
+    client = RawTestClient(server_mod.app)
+    client.get("/api/session")
+
+    r = client.get(
+        "/api/memory",
+        headers={"Origin": "https://attacker.example"},
+    )
+
+    assert r.status_code == 403
+
+
+def test_api_session_bootstrap_allows_loopback_client():
+    client = RawTestClient(server_mod.app)
+
+    bootstrap = client.get("/api/session")
+
+    assert bootstrap.status_code == 200
+    assert bootstrap.cookies.get("jobsmith_session")
+    assert client.get("/api/memory").status_code == 200
 
 
 def _parse_sse(text: str) -> list[dict]:

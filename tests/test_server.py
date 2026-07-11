@@ -1,6 +1,6 @@
 import json
 
-from fastapi.testclient import TestClient
+from tests.client import TestClient
 
 from app import graph as graph_mod
 from app import server as server_mod

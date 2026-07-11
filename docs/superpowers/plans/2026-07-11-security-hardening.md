@@ -79,7 +79,7 @@ Implement a pure ASGI middleware with a constant-time cookie comparison:
 
 ```python
 API_COOKIE = "jobsmith_session"
-ALLOWED_HOSTS = ("127.0.0.1", "localhost", "testserver")
+ALLOWED_HOSTS = ("127.0.0.1", "localhost")
 
 
 def new_api_token() -> str:
@@ -389,4 +389,3 @@ Expected: no insecure TLS patterns; session token references contain no logging 
 Review: `git diff origin/master...HEAD -- app frontend/src tests docs/superpowers`
 
 If a verification correction was required, commit it with `git commit -am "test: close security regression gaps"`. Otherwise leave the prior focused commits unchanged.
-
