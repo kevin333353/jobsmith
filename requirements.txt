@@ -7,6 +7,7 @@ pydantic>=2.13,<3.0
 python-dotenv>=1.0,<2.0
 pytest>=8.0,<10.0
 requests>=2.31,<3.0
+curl_cffi>=0.7,<1.0  # optional: Cloudflare 403 fallback for 104 source; gracefully skipped if absent
 fastapi>=0.138,<0.139
 uvicorn[standard]>=0.49,<0.50
 httpx>=0.27,<1.0

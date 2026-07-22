@@ -154,6 +154,37 @@ def test_source_104_blocked_on_error(monkeypatch):
 
 def test_source_104_blocked_on_non_ok(monkeypatch):
     monkeypatch.setattr(source_104, "http_get", lambda *a, **k: FakeResp(ok=False, status=403))
+    monkeypatch.setattr(source_104, "_CF_AVAILABLE", False)
+    res = source_104.search("AI")
+    assert res.blocked is True and res.error == "HTTP 403"
+
+
+def test_source_104_cf_fallback_on_403(monkeypatch):
+    # requests returns 403, curl_cffi fallback returns jobs
+    payload = {"data": [{"jobName": "CF職缺", "custName": "某公司",
+                         "link": {"job": "https://x/1"}}]}
+    monkeypatch.setattr(source_104, "http_get", lambda *a, **k: FakeResp(ok=False, status=403))
+    monkeypatch.setattr(source_104, "_CF_AVAILABLE", True)
+    monkeypatch.setattr(source_104, "_cf_get", lambda url: FakeResp(json_data=payload))
+    res = source_104.search("AI", limit=5)
+    assert res.blocked is False
+    assert len(res.jobs) == 1
+    assert res.jobs[0].title == "CF職缺"
+
+
+def test_source_104_blocked_when_cf_unavailable_and_403(monkeypatch):
+    # requests returns 403, curl_cffi not installed → still blocked
+    monkeypatch.setattr(source_104, "http_get", lambda *a, **k: FakeResp(ok=False, status=403))
+    monkeypatch.setattr(source_104, "_CF_AVAILABLE", False)
+    res = source_104.search("AI")
+    assert res.blocked is True and res.error == "HTTP 403"
+
+
+def test_source_104_cf_fallback_also_fails(monkeypatch):
+    # requests returns 403, curl_cffi also returns non-200 → blocked
+    monkeypatch.setattr(source_104, "http_get", lambda *a, **k: FakeResp(ok=False, status=403))
+    monkeypatch.setattr(source_104, "_CF_AVAILABLE", True)
+    monkeypatch.setattr(source_104, "_cf_get", lambda url: FakeResp(ok=False, status=403))
     res = source_104.search("AI")
     assert res.blocked is True and res.error == "HTTP 403"
 
