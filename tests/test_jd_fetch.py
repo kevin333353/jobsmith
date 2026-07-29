@@ -88,3 +88,87 @@ def test_blocks_cloud_metadata_ssrf():
     # link-local 169.254.169.254（雲端 metadata）必須被擋
     with pytest.raises(jd_fetch.JDFetchError):
         jd_fetch.fetch_jd("http://169.254.169.254/latest/meta-data/")
+
+
+def test_blocks_non_global_shared_address_ssrf(monkeypatch):
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(
+            jd_fetch.socket.AF_INET,
+            jd_fetch.socket.SOCK_STREAM,
+            jd_fetch.socket.IPPROTO_TCP,
+            "",
+            ("100.64.0.1", 0),
+        )]
+
+    monkeypatch.setattr(jd_fetch.socket, "getaddrinfo", fake_getaddrinfo)
+
+    with pytest.raises(jd_fetch.JDFetchError, match="安全"):
+        jd_fetch._guard_host("http://jobs.example.test/posting")
+
+
+def test_guarded_read_pins_validated_address(monkeypatch):
+    seen = {}
+    public_ip = "93.184.216.34"
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        assert host == "jobs.example.test"
+        return [(
+            jd_fetch.socket.AF_INET,
+            jd_fetch.socket.SOCK_STREAM,
+            jd_fetch.socket.IPPROTO_TCP,
+            "",
+            (public_ip, 0),
+        )]
+
+    class FakeResponse:
+        is_redirect = False
+        headers = {}
+        encoding = "utf-8"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_bytes(self):
+            yield b"synthetic job description"
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            seen["client_kwargs"] = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, **kwargs):
+            seen["method"] = method
+            seen["url"] = url
+            seen["stream_kwargs"] = kwargs
+            return FakeResponse()
+
+    def fail_unpinned_request(*args, **kwargs):
+        pytest.fail("request used the original hostname instead of the validated IP")
+
+    monkeypatch.setattr(jd_fetch.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(jd_fetch.httpx, "stream", fail_unpinned_request)
+    monkeypatch.setattr(jd_fetch.httpx, "Client", FakeClient)
+
+    content, encoding = jd_fetch._guarded_read(
+        "https://jobs.example.test/posting?id=7",
+        None,
+        "text/html",
+    )
+
+    assert content == b"synthetic job description"
+    assert encoding == "utf-8"
+    assert seen["client_kwargs"]["trust_env"] is False
+    assert jd_fetch.httpx.URL(seen["url"]).host == public_ip
+    assert seen["stream_kwargs"]["headers"]["Host"] == "jobs.example.test"
+    assert seen["stream_kwargs"]["extensions"]["sni_hostname"] == "jobs.example.test"

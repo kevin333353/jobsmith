@@ -4,9 +4,9 @@
 通用網址用 BeautifulSoup 取主文（移除 script/nav/footer 等雜訊）。失敗一律拋 JDFetchError，
 由端點轉成友善訊息，請使用者改貼 JD 文字。
 
-安全：URL 由使用者提供 → server 端抓取屬 SSRF 面向。抓取前解析主機 IP，擋掉
-loopback / 內網 / link-local（含雲端 metadata 169.254.169.254）/ reserved；redirect
-逐跳重新驗證；回應設大小上限避免被超大內容打爆記憶體。
+安全：URL 由使用者提供 → server 端抓取屬 SSRF 面向。抓取前解析主機全部 IP，只允許
+全球公開位址，並把實際連線鎖定至已驗證 IP（保留原 Host/TLS SNI）；redirect 逐跳重新
+驗證；回應設大小上限避免被超大內容打爆記憶體。
 """
 from __future__ import annotations
 
@@ -42,43 +42,83 @@ class JDFetchResult:
     source: str
 
 
-def _guard_host(url: str) -> None:
-    """解析主機所有 IP，擋掉 loopback/內網/link-local/reserved（防 SSRF）。"""
-    host = urlparse(url).hostname
-    if not host:
+def _guard_host(url: str) -> tuple[str, ...]:
+    """解析並回傳主機的全球公開 IP；任一非公開位址即拒絕（防 SSRF）。"""
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if parsed.scheme not in ("http", "https") or not host:
         raise JDFetchError("無效的網址。")
     try:
-        infos = socket.getaddrinfo(host, None)
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except Exception as exc:
         raise JDFetchError("無法解析網址主機。") from exc
+
+    addresses: list[str] = []
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError as exc:
+            raise JDFetchError("無法解析網址主機。") from exc
+        if not ip.is_global:
             raise JDFetchError("基於安全考量，不允許抓取內部或保留位址。")
+        normalized = str(ip)
+        if normalized not in addresses:
+            addresses.append(normalized)
+    if not addresses:
+        raise JDFetchError("無法解析網址主機。")
+    return tuple(addresses)
 
 
 def _guarded_read(url: str, referer: str | None, accept: str) -> tuple[bytes, str]:
-    """逐跳驗證主機 + 串流讀取設大小上限，回 (content, encoding)。"""
+    """逐跳驗證並鎖定已驗證 IP；串流讀取設大小上限，回 (content, encoding)。"""
     headers = {"User-Agent": UA, "Accept": accept}
     if referer:
         headers["Referer"] = referer
     cur, hops = url, 0
     while True:
-        _guard_host(cur)
-        with httpx.stream("GET", cur, headers=headers, timeout=20, follow_redirects=False) as r:
-            if r.is_redirect and r.headers.get("location") and hops < _MAX_REDIRECTS:
-                cur = urljoin(cur, r.headers["location"])
-                hops += 1
-                continue
-            r.raise_for_status()
-            total, chunks = 0, []
-            for chunk in r.iter_bytes():
-                total += len(chunk)
-                if total > _MAX_BYTES:
-                    raise JDFetchError("回應內容過大，已中止抓取。")
-                chunks.append(chunk)
-            return b"".join(chunks), (r.encoding or "utf-8")
+        addresses = _guard_host(cur)
+        original = httpx.URL(cur)
+        host_header = original.netloc.decode("ascii")
+        sni_hostname = original.raw_host.decode("ascii")
+        redirect_url: str | None = None
+        last_connect_error: Exception | None = None
+
+        # 每一跳使用獨立 client，避免不同原始 host 共用同一個「IP origin」TLS 連線。
+        with httpx.Client(trust_env=False, follow_redirects=False) as client:
+            for address in addresses:
+                pinned_url = original.copy_with(host=address)
+                request_headers = {**headers, "Host": host_header}
+                try:
+                    with client.stream(
+                        "GET",
+                        pinned_url,
+                        headers=request_headers,
+                        timeout=20,
+                        follow_redirects=False,
+                        extensions={"sni_hostname": sni_hostname},
+                    ) as r:
+                        if (r.is_redirect and r.headers.get("location")
+                                and hops < _MAX_REDIRECTS):
+                            redirect_url = urljoin(cur, r.headers["location"])
+                            break
+                        r.raise_for_status()
+                        total, chunks = 0, []
+                        for chunk in r.iter_bytes():
+                            total += len(chunk)
+                            if total > _MAX_BYTES:
+                                raise JDFetchError("回應內容過大，已中止抓取。")
+                            chunks.append(chunk)
+                        return b"".join(chunks), (r.encoding or "utf-8")
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    last_connect_error = exc
+
+        if redirect_url is not None:
+            cur = redirect_url
+            hops += 1
+            continue
+        if last_connect_error is not None:
+            raise last_connect_error
+        raise JDFetchError("無法連線至網址主機。")
 
 
 def _http_json(url: str, referer: str) -> dict:

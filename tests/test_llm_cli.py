@@ -136,6 +136,39 @@ def test_run_claude_strips_api_key_and_parses(monkeypatch):
     assert "--model" in seen["args"]
 
 
+def test_run_claude_research_restricts_all_available_tools(monkeypatch):
+    seen = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = json.dumps({"is_error": False, "result": "答案"})
+        stderr = ""
+
+    def fake_run(args, **kwargs):
+        seen["args"] = args
+        return FakeProc()
+
+    monkeypatch.setattr(cli, "_run_process", fake_run)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "claude")
+
+    out = cli._run_claude(
+        "research",
+        "haiku",
+        allowed_tools=cli.CLAUDE_RESEARCH_TOOLS,
+    )
+
+    assert out == "答案"
+    args = seen["args"]
+    assert "--safe-mode" in args
+    assert "--strict-mcp-config" in args
+    tools_index = args.index("--tools")
+    allowed_index = args.index("--allowedTools")
+    expected = cli.CLAUDE_RESEARCH_TOOLS
+    assert args[tools_index + 1:tools_index + 1 + len(expected)] == expected
+    assert args[allowed_index + 1:allowed_index + 1 + len(expected)] == expected
+    assert "Read" not in args and "Bash" not in args
+
+
 def test_run_claude_raises_on_error_envelope(monkeypatch):
     class FakeProc:
         returncode = 0

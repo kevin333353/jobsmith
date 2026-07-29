@@ -299,7 +299,8 @@ def _run_claude(prompt: str, model: str, allowed_tools: list[str] | None = None,
                 timeout: int = _TIMEOUT) -> str:
     """呼叫 `claude -p`（訂閱），回傳模型文字。移除 ANTHROPIC_API_KEY 以走訂閱登入。
 
-    allowed_tools 非空時帶 --allowedTools，讓模型可用 WebSearch/WebFetch 等工具上網查證。
+    allowed_tools 非空時同時限制「可見」與「免確認」工具，並隔離本機設定、MCP 與
+    CLAUDE.md，避免網頁內容透過 prompt injection 轉用 Read/Bash 等本機能力。
     """
     exe = _find_cli("claude", "CLAUDE_CLI_PATH")
     if not exe:
@@ -309,7 +310,15 @@ def _run_claude(prompt: str, model: str, allowed_tools: list[str] | None = None,
     env = _prepend_cli_dir_to_path(env, exe)
     args = [exe, "-p", _safe_arg(prompt), "--output-format", "json", "--model", model]
     if allowed_tools:
-        args += ["--allowedTools", *allowed_tools]
+        tools = list(dict.fromkeys(allowed_tools))
+        args += [
+            "--safe-mode",
+            "--strict-mcp-config",
+            "--tools",
+            *tools,
+            "--allowedTools",
+            *tools,
+        ]
     proc = _run_process(args, env=env, timeout=timeout)
     if proc.returncode != 0:
         raise RuntimeError(f"claude CLI 失敗（rc={proc.returncode}）：{(proc.stderr or '')[:300]}")

@@ -91,38 +91,24 @@ def test_structure_profile_ignores_pdf_status_fragment_before_name(monkeypatch):
     canned = Profile(name="狀在中", summary="AI 工程師", skills=["Python"], raw_text="")
     monkeypatch.setattr(mod, "get_llm", lambda tier, **kw: FakeLLM(canned))
     resume_text = "\n".join([
-        "個男   25     (2024/8)",
+        "個人資料（合成測試）",
         "狀在中",
-        "主⼿0979-352-452",
-        "E-mail eugenew0226@gmail.com",
-        "址中正路 ***",
-        "⼤",
-        "理⼤",
-        "2018/9~2023/6",
-        "⼯作",
-        "年2~3 年⼯作",
-        "⼯師",
-        "和潤司（其輔助  500 以上）",
-        "⼯師|內",
-        "2024/9~ 在",
-        " 開⼯師",
-        "光壽",
-        "⼯師",
-        "2023/1~2024/41 年 4 個⽉",
-        "件",
-        "希性⼯作",
-        "上⽇",
-        "可上⽇取可上",
-        "希⾯",
-        "希",
-        "希⼯師  ⼯師",
-        "王予",
-        "和潤司|⼯師",
+        "手機 000-000-0000",
+        "E-mail candidate@example.invalid",
+        "地址 範例市範例區",
+        "學歷",
+        "範例大學 資訊工程學系",
+        "工作經歷",
+        "範例科技股份有限公司",
+        "AI 工程師",
+        "2024/1~在職",
+        "Python FastAPI",
+        "王小明",
     ])
 
     result = mod.structure_profile(resume_text)
 
-    assert result.name == "王予"
+    assert result.name == "王小明"
 
 
 def test_structure_profile_falls_back_when_llm_parse_fails(monkeypatch):
