@@ -110,16 +110,31 @@ class LocalAPISecurityMiddleware:
         self.public_hosts = tuple(public_hosts or configured_public_hosts())
         self._rate_lock = threading.Lock()
         self._request_times: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+        self._rate_checks = 0
 
     def _rate_limited(self, request: Request, path: str) -> bool:
         limit = _PUBLIC_RATE_LIMITS.get(path)
         if not self.public_web or request.method != "POST" or limit is None:
             return False
         max_requests, window_seconds = limit
-        client_host = request.client.host if request.client else "unknown"
-        key = (client_host, path)
+        # Mobile carriers commonly place unrelated users behind one public IP.
+        # The signed browser session is a fairer identity and is never written to logs.
+        session = request.cookies.get(API_COOKIE, "")
+        identity = (
+            f"session:{hashlib.sha256(session.encode()).hexdigest()}"
+            if session
+            else f"ip:{request.client.host if request.client else 'unknown'}"
+        )
+        key = (identity, path)
         now = time.monotonic()
         with self._rate_lock:
+            self._rate_checks += 1
+            if self._rate_checks % 256 == 0:
+                for old_key, old_timestamps in list(self._request_times.items()):
+                    while old_timestamps and old_timestamps[0] <= now - window_seconds:
+                        old_timestamps.popleft()
+                    if not old_timestamps:
+                        self._request_times.pop(old_key, None)
             timestamps = self._request_times[key]
             while timestamps and timestamps[0] <= now - window_seconds:
                 timestamps.popleft()

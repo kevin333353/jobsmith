@@ -3,11 +3,14 @@ import threading
 from types import SimpleNamespace
 
 from fastapi import FastAPI
+from starlette.requests import Request
 
 from app import server as server_mod
 from app.models import Profile, ResumeAssessment
 from app.public_web import is_public_api_request
 from app.security import (
+    API_COOKIE,
+    LocalAPISecurityMiddleware,
     PublicSecurityHeadersMiddleware,
     is_allowed_origin,
     new_signed_session_token,
@@ -74,6 +77,61 @@ def test_public_web_session_is_per_browser_and_signed():
     assert verify_signed_session_token(second, secret)
     assert not verify_signed_session_token(first, "other-secret")
     assert not verify_signed_session_token(first + "tampered", secret)
+
+
+def test_public_rate_limit_is_per_browser_session_not_shared_mobile_ip():
+    middleware = LocalAPISecurityMiddleware(
+        app=lambda *_: None,
+        token="process-secret",
+        public_web=True,
+    )
+    first_session = new_signed_session_token("process-secret")
+    second_session = new_signed_session_token("process-secret")
+
+    def request(session: str, client_host: str = "203.0.113.10") -> Request:
+        return Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/api/jobs/auto",
+            "headers": [
+                (b"cookie", f"{API_COOKIE}={session}".encode()),
+            ],
+            "client": (client_host, 443),
+        })
+
+    for _ in range(8):
+        assert not middleware._rate_limited(request(first_session), "/api/jobs/auto")
+    assert middleware._rate_limited(request(first_session), "/api/jobs/auto")
+
+    # A different browser behind the same carrier NAT starts with its own quota.
+    assert not middleware._rate_limited(request(second_session), "/api/jobs/auto")
+    # Changing IP does not reset the original browser's quota.
+    assert middleware._rate_limited(
+        request(first_session, "198.51.100.22"),
+        "/api/jobs/auto",
+    )
+
+
+def test_public_session_bootstrap_keeps_valid_browser_identity(monkeypatch):
+    monkeypatch.setattr(server_mod, "PUBLIC_WEB", True)
+    session = new_signed_session_token(server_mod._API_TOKEN)
+
+    valid_request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/api/session",
+        "headers": [(b"cookie", f"{API_COOKIE}={session}".encode())],
+    })
+    valid_response = server_mod.api_session(valid_request)
+    invalid_response = server_mod.api_session(Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/api/session",
+        "headers": [],
+    }))
+
+    assert "set-cookie" not in valid_response.headers
+    assert API_COOKIE in invalid_response.headers["set-cookie"]
 
 
 def test_public_origin_requires_exact_https_host():

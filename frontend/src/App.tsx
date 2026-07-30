@@ -43,6 +43,10 @@ export type RuntimeConfig = {
   ai_enabled: boolean
   persistence_enabled: boolean
   max_search_pages: number
+  preview_concurrency?: number | null
+  search_concurrency?: number | null
+  search_queue_capacity?: number | null
+  search_cache_ttl_seconds?: number | null
   version: string
 }
 
@@ -102,6 +106,7 @@ function PublicWebApp({ runtime }: { runtime: RuntimeConfig }) {
             <p>
               公開測試版不需帳號、不呼叫 AI，也不把履歷寫入資料庫。
               檔案只在本次請求中解析；搜尋結果只保存在這台裝置的瀏覽器。
+              多人同時使用會自動排隊；熱門條件只共用短期職缺快取，不包含履歷內容。
             </p>
           </div>
         )}

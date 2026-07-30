@@ -656,6 +656,7 @@ def test_jobs_auto_local_mode_never_touches_ai_and_emits_skill_gap(monkeypatch):
 
 def test_public_web_forces_local_mode_caps_pages_and_omits_resume_text(monkeypatch):
     from app.models import JobMatch, JobPosting, Profile, SearchResult
+    from app.public_capacity import PublicSearchGate, SearchResultCache
 
     client = TestClient(server_mod.app)
     captured = {}
@@ -664,6 +665,8 @@ def test_public_web_forces_local_mode_caps_pages_and_omits_resume_text(monkeypat
         raise AssertionError("public Web mode must never touch an AI backend")
 
     monkeypatch.setattr(server_mod, "PUBLIC_WEB", True)
+    monkeypatch.setattr(server_mod, "_PUBLIC_SEARCH_GATE", PublicSearchGate(3, 12))
+    monkeypatch.setattr(server_mod, "_PUBLIC_SEARCH_CACHE", SearchResultCache(900, 64))
     monkeypatch.setattr(server_mod, "ensure_backend_live", fail_ai)
     monkeypatch.setattr(server_mod, "structure_profile", fail_ai)
     monkeypatch.setattr(server_mod, "derive_queries", fail_ai)
@@ -709,6 +712,124 @@ def test_public_web_forces_local_mode_caps_pages_and_omits_resume_text(monkeypat
     assert profile["name"] == "手機測試者"
     assert "raw_text" not in profile
     assert not any(event["type"] == "error" for event in events)
+
+
+def test_public_web_reuses_source_cache_without_caching_resume_data(monkeypatch):
+    from app.models import JobMatch, JobPosting, Profile, SearchResult
+    from app.public_capacity import PublicSearchGate, SearchResultCache
+
+    client = TestClient(server_mod.app)
+    monkeypatch.setattr(server_mod, "PUBLIC_WEB", True)
+    monkeypatch.setattr(server_mod, "_PUBLIC_SEARCH_GATE", PublicSearchGate(3, 12))
+    cache = SearchResultCache(900, 64)
+    monkeypatch.setattr(server_mod, "_PUBLIC_SEARCH_CACHE", cache)
+    monkeypatch.setattr(
+        server_mod,
+        "structure_profile_local",
+        lambda text: Profile(
+            name=text,
+            summary="護理師",
+            preferred_roles=["護理師"],
+            raw_text=text,
+        ),
+    )
+    monkeypatch.setattr(server_mod, "derive_local_queries", lambda profile: ["護理師"])
+    job = JobPosting(
+        source="104",
+        title="護理師",
+        company="合成醫院",
+        url="https://example.test/nurse",
+    )
+    calls = {"count": 0}
+
+    def fake_search(query, limit=15, pages=2, area=None, **kwargs):
+        calls["count"] += 1
+        return [SearchResult(source="104", jobs=[job])]
+
+    monkeypatch.setattr(server_mod, "search_all", fake_search)
+    monkeypatch.setattr(
+        server_mod,
+        "rank_jobs_locally",
+        lambda profile, jobs, top_k=None: [
+            JobMatch(job=jobs[0], fit_score=80, ranking_mode="local"),
+        ],
+    )
+
+    first = _parse_sse(client.post(
+        "/api/jobs/auto",
+        data={"resume_text": "合成候選人甲", "search_mode": "local"},
+    ).text)
+    second = _parse_sse(client.post(
+        "/api/jobs/auto",
+        data={"resume_text": "合成候選人乙", "search_mode": "local"},
+    ).text)
+
+    assert calls["count"] == 1
+    assert next(event for event in first if event["type"] == "profile")["data"]["name"] == "合成候選人甲"
+    assert next(event for event in second if event["type"] == "profile")["data"]["name"] == "合成候選人乙"
+    assert any(
+        event.get("step") == "cache"
+        for event in second
+        if event["type"] == "progress"
+    )
+    assert cache.stats()["entries"] == 1
+
+
+def test_public_web_rejects_only_after_bounded_queue_is_full(monkeypatch):
+    from app.public_capacity import PublicSearchGate
+
+    client = TestClient(server_mod.app)
+    gate = PublicSearchGate(concurrency=1, max_queue=0)
+    active = gate.register()
+    monkeypatch.setattr(server_mod, "PUBLIC_WEB", True)
+    monkeypatch.setattr(server_mod, "_PUBLIC_SEARCH_GATE", gate)
+    monkeypatch.setattr(
+        server_mod,
+        "_resume_text_from_request",
+        lambda *_: (_ for _ in ()).throw(
+            AssertionError("a rejected request must not parse the resume"),
+        ),
+    )
+
+    try:
+        events = _parse_sse(client.post(
+            "/api/jobs/auto",
+            data={"resume_text": "不應解析"},
+        ).text)
+    finally:
+        gate.release(active.ticket_id)
+
+    error = next(event for event in events if event["type"] == "error")
+    assert "排隊人數已滿" in error["message"]
+
+
+def test_public_resume_preview_rejects_before_parsing_when_capacity_is_full(monkeypatch):
+    import threading
+
+    client = TestClient(server_mod.app)
+    slots = threading.BoundedSemaphore(1)
+    assert slots.acquire(blocking=False)
+    monkeypatch.setattr(server_mod, "PUBLIC_WEB", True)
+    monkeypatch.setattr(server_mod, "_PUBLIC_PREVIEW_SLOTS", slots)
+    monkeypatch.setattr(
+        server_mod,
+        "_resume_text_from_request",
+        lambda *_: (_ for _ in ()).throw(
+            AssertionError("a rejected preview must not parse the resume"),
+        ),
+    )
+
+    try:
+        response = client.post(
+            "/api/resume/preview",
+            data={"resume_text": "不應解析"},
+        )
+    finally:
+        slots.release()
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "2"
+    assert "較多人使用" in response.json()["error"]
 
 
 def test_resume_preview_is_local_compact_and_never_touches_ai(monkeypatch):

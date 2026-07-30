@@ -38,6 +38,7 @@ import {
   type JobSearchMode,
 } from "../lib/localDiscovery"
 import { describeSearchScope } from "../lib/searchScope"
+import { shouldReuseResumePreview } from "../lib/publicWeb"
 import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
@@ -481,7 +482,15 @@ export function JobSearchView(
   function onStart() {
     const form = new FormData()
     let options: { resumeLabel?: string; updateActiveProfile?: boolean; initialStatus?: string } = {}
-    if (file) {
+    if (shouldReuseResumePreview(publicWeb, Boolean(file), Boolean(previewProfile), previewBusy)) {
+      // Public Web needs only the compact local profile after preview. Avoid uploading
+      // and parsing the same resume file a second time when the user starts searching.
+      form.append("profile_json", JSON.stringify(previewProfile))
+      options = {
+        resumeLabel: file?.name || "履歷檔案",
+        initialStatus: "準備搜尋…",
+      }
+    } else if (file) {
       form.append("file", file)
     } else if (text.trim()) {
       form.append("resume_text", text)

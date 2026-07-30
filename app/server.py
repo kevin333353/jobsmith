@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 import requests
-from fastapi import Body, FastAPI, File, Form, UploadFile
+from fastapi import Body, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.memory import MemorySaver
@@ -36,13 +36,25 @@ from app.cli import load_profile
 from app.graph import build_graph
 from app.intake.resume_parser import extract_text
 from app.models import MatchReport, ParsedJob, Profile
+from app.public_capacity import (
+    PublicSearchGate,
+    SearchResultCache,
+    public_preview_concurrency,
+    public_search_cache_entries,
+    public_search_cache_ttl_seconds,
+    public_search_queue_capacity,
+    public_search_wait_seconds,
+    source_search_cache_key,
+)
 from app.public_web import PUBLIC_WEB, public_search_concurrency
 from app.security import (
     ALLOWED_HOSTS,
+    API_COOKIE,
     LocalAPISecurityMiddleware,
     PublicSecurityHeadersMiddleware,
     new_api_token,
     set_session_cookie,
+    verify_signed_session_token,
 )
 from app.sources import regions
 from app.sources import work_mode as work_mode_filter
@@ -86,12 +98,26 @@ _ERROR_LOG = _ROOT / "data" / "error.log"
 _MAX_RESUME_UPLOAD_BYTES = 5 * 1024 * 1024
 _MAX_RESUME_TEXT_CHARS = 100_000
 _PUBLIC_RESUME_EXTENSIONS = frozenset({".pdf", ".docx", ".txt"})
-_PUBLIC_SEARCH_SLOTS = threading.BoundedSemaphore(public_search_concurrency())
+_PUBLIC_PREVIEW_SLOTS = threading.BoundedSemaphore(public_preview_concurrency())
+_PUBLIC_SEARCH_GATE = PublicSearchGate(
+    public_search_concurrency(),
+    public_search_queue_capacity(),
+)
+_PUBLIC_SEARCH_CACHE = SearchResultCache(
+    public_search_cache_ttl_seconds(),
+    public_search_cache_entries(),
+)
 
 
 @app.get("/api/session")
-def api_session():
+def api_session(request: Request):
     """Bootstrap an HttpOnly API session cookie."""
+    if PUBLIC_WEB and verify_signed_session_token(
+        request.cookies.get(API_COOKIE, ""),
+        _API_TOKEN,
+    ):
+        # Keep the same browser identity across reloads so its usage quota is meaningful.
+        return JSONResponse({"ok": True})
     return set_session_cookie(
         JSONResponse({"ok": True}),
         _API_TOKEN,
@@ -107,6 +133,14 @@ def api_runtime():
         "ai_enabled": not PUBLIC_WEB,
         "persistence_enabled": not PUBLIC_WEB,
         "max_search_pages": 2 if PUBLIC_WEB else 5,
+        "preview_concurrency": public_preview_concurrency() if PUBLIC_WEB else None,
+        "search_concurrency": public_search_concurrency() if PUBLIC_WEB else None,
+        "search_queue_capacity": public_search_queue_capacity() if PUBLIC_WEB else None,
+        "search_cache_ttl_seconds": (
+            public_search_cache_ttl_seconds()
+            if PUBLIC_WEB
+            else None
+        ),
         "version": __version__,
     }
 
@@ -172,19 +206,32 @@ def resume_preview(
     resume_text: str = Form(default=""),
 ):
     """Locally extract a compact profile so target roles can be reviewed before searching."""
-    text, text_error = _resume_text_from_request(file, resume_text)
-    if text_error:
-        return JSONResponse({"error": text_error}, status_code=400)
-    if not text.strip():
-        return JSONResponse({"error": "請提供履歷檔案或文字"}, status_code=400)
+    preview_slot = False
+    if PUBLIC_WEB:
+        preview_slot = _PUBLIC_PREVIEW_SLOTS.acquire(blocking=False)
+        if not preview_slot:
+            return JSONResponse(
+                {"error": "履歷辨識目前較多人使用；仍可直接開始搜尋，或稍候再試。"},
+                status_code=503,
+                headers={"Retry-After": "2"},
+            )
     try:
-        profile = structure_profile_local(text)
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse(
-            {"error": f"履歷暫時無法辨識：{_err_detail(exc)}"},
-            status_code=422,
-        )
-    return {"profile": profile.model_dump(exclude={"raw_text"})}
+        text, text_error = _resume_text_from_request(file, resume_text)
+        if text_error:
+            return JSONResponse({"error": text_error}, status_code=400)
+        if not text.strip():
+            return JSONResponse({"error": "請提供履歷檔案或文字"}, status_code=400)
+        try:
+            profile = structure_profile_local(text)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(
+                {"error": f"履歷暫時無法辨識：{_err_detail(exc)}"},
+                status_code=422,
+            )
+        return {"profile": profile.model_dump(exclude={"raw_text"})}
+    finally:
+        if preview_slot:
+            _PUBLIC_PREVIEW_SLOTS.release()
 
 
 def _err_detail(exc: Exception) -> str:
@@ -579,8 +626,6 @@ def jobs_auto(
     region_keys = regions.parse_keys(region)
     area = regions.area_codes(region_keys)
     work_mode_keys = work_mode_filter.parse_work_modes(work_mode)
-    text, text_error = _resume_text_from_request(file, resume_text)
-    posted_profile, profile_error = (None, None) if text.strip() else _profile_from_json(profile_json)
     target_role_list = _parse_target_roles(target_roles)
     company_list = _parse_companies(companies)
     if PUBLIC_WEB:
@@ -588,18 +633,64 @@ def jobs_auto(
     token = _task_from_id(task_id)
 
     def gen():
-        public_slot = False
+        public_ticket_id = ""
         try:
             yield _sse({"type": "start", "task_id": token.task_id})
             if PUBLIC_WEB:
-                public_slot = _PUBLIC_SEARCH_SLOTS.acquire(blocking=False)
-                if not public_slot:
+                queue_state = _PUBLIC_SEARCH_GATE.register()
+                if not queue_state.accepted:
                     yield _sse({
                         "type": "error",
-                        "message": "公開測試版目前使用人數較多，請稍候一分鐘再試。",
+                        "message": "目前排隊人數已滿，請稍候一分鐘再試；不用重新上傳履歷。",
                     })
                     return
+                public_ticket_id = queue_state.ticket_id
+                queued_at = time.monotonic()
+                was_queued = not queue_state.acquired
+                while not queue_state.acquired:
+                    token.check()
+                    waited = time.monotonic() - queued_at
+                    remaining = public_search_wait_seconds() - waited
+                    if remaining <= 0:
+                        yield _sse({
+                            "type": "error",
+                            "message": "目前等待時間較長，這次排隊已取消，請稍後再試。",
+                        })
+                        return
+                    queue_message = (
+                        f"目前搜尋較多，正在排隊（順位 {queue_state.position}）；"
+                        "請保持此頁開啟，不需要重新送出。"
+                    )
+                    yield _sse({
+                        "type": "progress",
+                        "step": "queue",
+                        "message": queue_message,
+                    })
+                    queue_state = _PUBLIC_SEARCH_GATE.wait_for_turn(
+                        public_ticket_id,
+                        timeout=min(2.0, remaining),
+                    )
+                    if not queue_state.accepted:
+                        yield _sse({
+                            "type": "error",
+                            "message": "排隊工作已取消，請重新開始搜尋。",
+                        })
+                        return
+                if was_queued:
+                    yield _sse({
+                        "type": "progress",
+                        "step": "queue",
+                        "message": "已輪到你，開始解析履歷與搜尋職缺…",
+                    })
             token.check()
+            # Delay parsing until a public search slot is available, so a burst of
+            # PDF/DOCX uploads cannot bypass the capacity gate.
+            text, text_error = _resume_text_from_request(file, resume_text)
+            posted_profile, profile_error = (
+                (None, None)
+                if text.strip()
+                else _profile_from_json(profile_json)
+            )
             if text_error:
                 yield _sse({"type": "error", "message": text_error})
                 return
@@ -670,7 +761,48 @@ def jobs_auto(
                         "work_modes": work_mode_keys,
                         "include_inferred": include_inferred_work_mode,
                     }
-                for res in search_all(q, limit=15, pages=pages, area=area, **search_kwargs):
+                cache_status = "miss"
+                if PUBLIC_WEB:
+                    cache_key = source_search_cache_key(
+                        q,
+                        sources=None,
+                        limit=15,
+                        pages=pages,
+                        area=area,
+                        work_modes=work_mode_keys,
+                        include_inferred=include_inferred_work_mode,
+                    )
+                    search_results, cache_status = _PUBLIC_SEARCH_CACHE.get_or_load(
+                        cache_key,
+                        lambda: search_all(
+                            q,
+                            limit=15,
+                            pages=pages,
+                            area=area,
+                            **search_kwargs,
+                        ),
+                    )
+                else:
+                    search_results = search_all(
+                        q,
+                        limit=15,
+                        pages=pages,
+                        area=area,
+                        **search_kwargs,
+                    )
+                if cache_status == "hit":
+                    yield _sse({
+                        "type": "progress",
+                        "step": "cache",
+                        "message": f"使用最近的「{q}」匿名職缺快取，加快這次搜尋…",
+                    })
+                elif cache_status == "shared":
+                    yield _sse({
+                        "type": "progress",
+                        "step": "cache",
+                        "message": f"共用正在取得的「{q}」職缺資料，避免重複請求來源網站…",
+                    })
+                for res in search_results:
                     token.check()
                     # 104 已於來源端用 area 篩過；其餘來源在結果端依 location 過濾，地區一致生效。
                     region_kept = [j for j in res.jobs
@@ -818,8 +950,8 @@ def jobs_auto(
             yield _sse({"type": "error",
                         "message": f"{prefix}，請稍後再試。（{_err_detail(exc)}）"})
         finally:
-            if public_slot:
-                _PUBLIC_SEARCH_SLOTS.release()
+            if public_ticket_id:
+                _PUBLIC_SEARCH_GATE.release(public_ticket_id)
             _finish_task(token)
 
     return StreamingResponse(
