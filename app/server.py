@@ -36,6 +36,17 @@ from app.cli import load_profile
 from app.graph import build_graph
 from app.intake.resume_parser import extract_text
 from app.models import MatchReport, ParsedJob, Profile
+from app.product_analytics import (
+    ProductAnalytics,
+    combined_cache_status,
+    device_bucket,
+    duration_bucket,
+    preview_failure_category,
+    result_count_bucket,
+    resume_input_bucket,
+    source_count_bucket,
+    target_role_count_bucket,
+)
 from app.public_capacity import (
     PublicSearchGate,
     SearchResultCache,
@@ -52,6 +63,7 @@ from app.security import (
     API_COOKIE,
     LocalAPISecurityMiddleware,
     PublicSecurityHeadersMiddleware,
+    is_allowed_origin,
     new_api_token,
     set_session_cookie,
     verify_signed_session_token,
@@ -67,6 +79,11 @@ from app.store import resume_checks as _resume_checks
 from app.store import searches as _searches
 
 _API_TOKEN = new_api_token()
+_PRODUCT_ANALYTICS = ProductAnalytics.from_env(
+    public_web=PUBLIC_WEB,
+    secret=_API_TOKEN,
+    app_version=__version__,
+)
 app = FastAPI(
     title="Jobsmith",
     docs_url=None if PUBLIC_WEB else "/docs",
@@ -109,6 +126,39 @@ _PUBLIC_SEARCH_CACHE = SearchResultCache(
 )
 
 
+def _analytics_request_context(request: Request) -> tuple[str, str]:
+    """Return only a verified session token and coarse device class.
+
+    Do Not Track and Global Privacy Control are honored before any event is queued.
+    The raw cookie and User-Agent never leave this process.
+    """
+    if not PUBLIC_WEB or not _PRODUCT_ANALYTICS.enabled:
+        return "", "unknown"
+    if request.headers.get("dnt", "").strip() == "1":
+        return "", "unknown"
+    if request.headers.get("sec-gpc", "").strip() == "1":
+        return "", "unknown"
+    session_cookie = request.cookies.get(API_COOKIE, "")
+    if not verify_signed_session_token(session_cookie, _API_TOKEN):
+        return "", "unknown"
+    return session_cookie, device_bucket(request.headers.get("user-agent", ""))
+
+
+def _capture_product_event(
+    event: str,
+    session_cookie: str,
+    device: str,
+    properties: dict[str, object] | None = None,
+) -> bool:
+    if not session_cookie:
+        return False
+    return _PRODUCT_ANALYTICS.capture(
+        event,
+        session_cookie,
+        {"device": device, **(properties or {})},
+    )
+
+
 @app.get("/api/session")
 def api_session(request: Request):
     """Bootstrap an HttpOnly API session cookie."""
@@ -126,12 +176,33 @@ def api_session(request: Request):
 
 
 @app.get("/api/runtime", include_in_schema=False)
-def api_runtime():
+def api_runtime(request: Request):
     """Tell the bundled frontend which product surface this process exposes."""
+    referer = request.headers.get("referer", "")
+    analytics_session, analytics_device = _analytics_request_context(request)
+    if referer and is_allowed_origin(referer, ALLOWED_HOSTS):
+        _capture_product_event(
+            "web_opened",
+            analytics_session,
+            analytics_device,
+            {
+                "source": request.headers.get(
+                    "x-jobsmith-analytics-source",
+                    "direct",
+                ),
+                "campaign": request.headers.get(
+                    "x-jobsmith-analytics-campaign",
+                    "none",
+                ),
+            },
+        )
     return {
         "public_web": PUBLIC_WEB,
         "ai_enabled": not PUBLIC_WEB,
         "persistence_enabled": not PUBLIC_WEB,
+        "analytics_enabled": (
+            PUBLIC_WEB and _PRODUCT_ANALYTICS.enabled
+        ),
         "max_search_pages": 2 if PUBLIC_WEB else 5,
         "preview_concurrency": public_preview_concurrency() if PUBLIC_WEB else None,
         "search_concurrency": public_search_concurrency() if PUBLIC_WEB else None,
@@ -202,14 +273,34 @@ def _profile_from_json(raw: str) -> tuple[Profile | None, str | None]:
 
 @app.post("/api/resume/preview")
 def resume_preview(
+    request: Request,
     file: UploadFile | None = File(default=None),
     resume_text: str = Form(default=""),
 ):
     """Locally extract a compact profile so target roles can be reviewed before searching."""
+    started_at = time.monotonic()
+    analytics_session, analytics_device = _analytics_request_context(request)
+    analytics_input = resume_input_bucket(
+        file.filename if file else None,
+        has_text=bool(resume_text.strip()),
+    )
+    preview_succeeded = False
+    preview_role_count = 0
+    failure_category = "server_error"
     preview_slot = False
     if PUBLIC_WEB:
         preview_slot = _PUBLIC_PREVIEW_SLOTS.acquire(blocking=False)
         if not preview_slot:
+            _capture_product_event(
+                "resume_preview_failed",
+                analytics_session,
+                analytics_device,
+                {
+                    "resume_input": analytics_input,
+                    "duration_bucket": duration_bucket(time.monotonic() - started_at),
+                    "failure_category": "busy",
+                },
+            )
             return JSONResponse(
                 {"error": "履歷辨識目前較多人使用；仍可直接開始搜尋，或稍候再試。"},
                 status_code=503,
@@ -218,20 +309,47 @@ def resume_preview(
     try:
         text, text_error = _resume_text_from_request(file, resume_text)
         if text_error:
+            failure_category = preview_failure_category(text_error)
             return JSONResponse({"error": text_error}, status_code=400)
         if not text.strip():
+            failure_category = "invalid_input"
             return JSONResponse({"error": "請提供履歷檔案或文字"}, status_code=400)
         try:
             profile = structure_profile_local(text)
         except Exception as exc:  # noqa: BLE001
+            failure_category = "parse_error"
             return JSONResponse(
                 {"error": f"履歷暫時無法辨識：{_err_detail(exc)}"},
                 status_code=422,
             )
+        preview_succeeded = True
+        preview_role_count = len(profile.preferred_roles)
         return {"profile": profile.model_dump(exclude={"raw_text"})}
     finally:
         if preview_slot:
             _PUBLIC_PREVIEW_SLOTS.release()
+        properties = {
+            "resume_input": analytics_input,
+            "duration_bucket": duration_bucket(time.monotonic() - started_at),
+        }
+        if preview_succeeded:
+            properties["target_role_count_bucket"] = target_role_count_bucket(
+                preview_role_count,
+            )
+            _capture_product_event(
+                "resume_preview_completed",
+                analytics_session,
+                analytics_device,
+                properties,
+            )
+        else:
+            properties["failure_category"] = failure_category
+            _capture_product_event(
+                "resume_preview_failed",
+                analytics_session,
+                analytics_device,
+                properties,
+            )
 
 
 def _err_detail(exc: Exception) -> str:
@@ -582,6 +700,7 @@ def _parse_target_roles(raw: str, limit: int = 3) -> list[str]:
 
 @app.post("/api/jobs/auto")
 def jobs_auto(
+    request: Request,
     file: UploadFile | None = File(default=None),
     resume_text: str = Form(default=""),
     profile_json: str = Form(default=""),
@@ -631,14 +750,47 @@ def jobs_auto(
     if PUBLIC_WEB:
         company_list = company_list[:2]
     token = _task_from_id(task_id)
+    analytics_session, analytics_device = _analytics_request_context(request)
+    analytics_input = resume_input_bucket(
+        file.filename if file else None,
+        has_text=bool(resume_text.strip()),
+        has_profile=bool(profile_json.strip()),
+    )
 
     def gen():
         public_ticket_id = ""
+        started_at = time.monotonic()
+        search_succeeded = False
+        failure_category = "interrupted"
+        was_queued = False
+        cache_statuses: set[str] = set()
+        source_names: set[str] = set()
+        result_count = 0
+        _capture_product_event(
+            "search_started",
+            analytics_session,
+            analytics_device,
+            {
+                "resume_input": analytics_input,
+                "target_role_count_bucket": target_role_count_bucket(
+                    len(target_role_list),
+                ),
+                "has_region_filter": bool(region_keys),
+                "has_work_mode_filter": bool(work_mode_keys),
+                "has_company_filter": bool(company_list),
+            },
+        )
         try:
             yield _sse({"type": "start", "task_id": token.task_id})
             if PUBLIC_WEB:
                 queue_state = _PUBLIC_SEARCH_GATE.register()
                 if not queue_state.accepted:
+                    failure_category = "queue_full"
+                    _capture_product_event(
+                        "queue_full",
+                        analytics_session,
+                        analytics_device,
+                    )
                     yield _sse({
                         "type": "error",
                         "message": "目前排隊人數已滿，請稍候一分鐘再試；不用重新上傳履歷。",
@@ -647,11 +799,18 @@ def jobs_auto(
                 public_ticket_id = queue_state.ticket_id
                 queued_at = time.monotonic()
                 was_queued = not queue_state.acquired
+                if was_queued:
+                    _capture_product_event(
+                        "queue_entered",
+                        analytics_session,
+                        analytics_device,
+                    )
                 while not queue_state.acquired:
                     token.check()
                     waited = time.monotonic() - queued_at
                     remaining = public_search_wait_seconds() - waited
                     if remaining <= 0:
+                        failure_category = "queue_timeout"
                         yield _sse({
                             "type": "error",
                             "message": "目前等待時間較長，這次排隊已取消，請稍後再試。",
@@ -671,6 +830,7 @@ def jobs_auto(
                         timeout=min(2.0, remaining),
                     )
                     if not queue_state.accepted:
+                        failure_category = "cancelled"
                         yield _sse({
                             "type": "error",
                             "message": "排隊工作已取消，請重新開始搜尋。",
@@ -692,12 +852,15 @@ def jobs_auto(
                 else _profile_from_json(profile_json)
             )
             if text_error:
+                failure_category = "invalid_input"
                 yield _sse({"type": "error", "message": text_error})
                 return
             if profile_error:
+                failure_category = "invalid_input"
                 yield _sse({"type": "error", "message": profile_error})
                 return
             if not text.strip() and posted_profile is None:
+                failure_category = "invalid_input"
                 yield _sse({"type": "error", "message": "請提供履歷檔案或文字"})
                 return
             if search_mode == "ai":
@@ -710,6 +873,7 @@ def jobs_auto(
                 with task_control.task_context(token):
                     live, live_msg = ensure_backend_live(settings.current_backend())
                 if not live:
+                    failure_category = "backend_unavailable"
                     yield _sse({"type": "error", "message": live_msg})
                     return
                 token.check()
@@ -790,6 +954,7 @@ def jobs_auto(
                         area=area,
                         **search_kwargs,
                     )
+                cache_statuses.add(cache_status)
                 if cache_status == "hit":
                     yield _sse({
                         "type": "progress",
@@ -804,6 +969,7 @@ def jobs_auto(
                     })
                 for res in search_results:
                     token.check()
+                    source_names.add(res.source)
                     # 104 已於來源端用 area 篩過；其餘來源在結果端依 location 過濾，地區一致生效。
                     region_kept = [j for j in res.jobs
                                    if res.source == "104" or regions.match_location(j.location, region_keys)]
@@ -871,6 +1037,7 @@ def jobs_auto(
                         "type": "ranked_batch",
                         "data": [match.model_dump() for match in batch],
                     })
+            result_count = len(matches)
 
             related_jobs = [match.job for match in matches if match.fit_score >= 60]
             if not related_jobs:
@@ -927,6 +1094,7 @@ def jobs_auto(
                 yield _sse({"type": "source", "source": company,
                             "count": added, "blocked": added == 0})
             if company_pool:
+                source_names.add("company")
                 rank_label = "用本機規則比對" if search_mode == "local" else "依履歷排序"
                 yield _sse({
                     "type": "progress",
@@ -942,14 +1110,45 @@ def jobs_auto(
                 token.check()
                 yield _sse({"type": "company_jobs",
                             "data": [m.model_dump() for m in cmatches]})
+                result_count += len(cmatches)
+            search_succeeded = True
             yield _sse({"type": "done"})
         except task_control.TaskCancelled:
+            failure_category = "cancelled"
             yield _stopped_sse()
+        except GeneratorExit:
+            failure_category = "cancelled"
+            raise
         except Exception as exc:  # LLM/網路錯誤：友善降級
+            failure_category = "server_error"
             prefix = "AI 服務暫時無法使用" if search_mode == "ai" else "搜尋暫時無法完成"
             yield _sse({"type": "error",
                         "message": f"{prefix}，請稍後再試。（{_err_detail(exc)}）"})
         finally:
+            analytics_properties = {
+                "duration_bucket": duration_bucket(time.monotonic() - started_at),
+                "cache_status": combined_cache_status(cache_statuses),
+                "queued": was_queued,
+            }
+            if search_succeeded:
+                analytics_properties.update({
+                    "result_count_bucket": result_count_bucket(result_count),
+                    "source_count_bucket": source_count_bucket(len(source_names)),
+                })
+                _capture_product_event(
+                    "search_completed",
+                    analytics_session,
+                    analytics_device,
+                    analytics_properties,
+                )
+            else:
+                analytics_properties["failure_category"] = failure_category
+                _capture_product_event(
+                    "search_failed",
+                    analytics_session,
+                    analytics_device,
+                    analytics_properties,
+                )
             if public_ticket_id:
                 _PUBLIC_SEARCH_GATE.release(public_ticket_id)
             _finish_task(token)

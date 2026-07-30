@@ -24,3 +24,11 @@ services:
         value: "900"
       - key: JOBSMITH_PUBLIC_SEARCH_CACHE_ENTRIES
         value: "64"
+      # Optional, server-side anonymous product analytics. Keep disabled until
+      # JOBSMITH_POSTHOG_PROJECT_KEY is configured privately in Render.
+      - key: JOBSMITH_PUBLIC_ANALYTICS
+        value: "0"
+      - key: JOBSMITH_POSTHOG_HOST
+        value: https://eu.i.posthog.com
+      - key: JOBSMITH_POSTHOG_PROJECT_KEY
+        sync: false
