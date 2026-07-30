@@ -30,9 +30,9 @@
 
 ---
 
-## 手機 Web（免 AI、免安裝）
+## Web（免 AI、免安裝）
 
-**[📱 立即用手機開啟 Jobsmith Web](https://jobsmith-web.onrender.com)**
+**[📱 立即開啟 Jobsmith Web](https://jobsmith-web.onrender.com)**
 
 不用安裝 App、不用 AI 帳號，也不需要 API key。公開 Web 測試版支援：
 
