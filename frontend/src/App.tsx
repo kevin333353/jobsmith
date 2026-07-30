@@ -47,6 +47,7 @@ export type RuntimeConfig = {
   search_concurrency?: number | null
   search_queue_capacity?: number | null
   search_cache_ttl_seconds?: number | null
+  analytics_enabled?: boolean
   version: string
 }
 
@@ -107,6 +108,9 @@ function PublicWebApp({ runtime }: { runtime: RuntimeConfig }) {
               公開測試版不需帳號、不呼叫 AI，也不把履歷寫入資料庫。
               檔案只在本次請求中解析；搜尋結果只保存在這台裝置的瀏覽器。
               多人同時使用會自動排隊；熱門條件只共用短期職缺快取，不包含履歷內容。
+              {runtime.analytics_enabled && (
+                <> 網站只記錄匿名流量、成功／失敗與效能區間，不記錄履歷或搜尋內容。</>
+              )}
             </p>
           </div>
         )}

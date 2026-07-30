@@ -134,6 +134,101 @@ def test_public_session_bootstrap_keeps_valid_browser_identity(monkeypatch):
     assert API_COOKIE in invalid_response.headers["set-cookie"]
 
 
+def test_public_analytics_requires_signed_session_and_honors_privacy_signals(monkeypatch):
+    class FakeAnalytics:
+        enabled = True
+
+        def capture(self, *args, **kwargs):
+            raise AssertionError("request context should not emit an event")
+
+    monkeypatch.setattr(server_mod, "PUBLIC_WEB", True)
+    monkeypatch.setattr(server_mod, "_PRODUCT_ANALYTICS", FakeAnalytics())
+    session = new_signed_session_token(server_mod._API_TOKEN)
+
+    def request(*headers: tuple[bytes, bytes]) -> Request:
+        return Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/api/runtime",
+            "headers": list(headers),
+        })
+
+    valid = request(
+        (b"cookie", f"{API_COOKIE}={session}".encode()),
+        (b"user-agent", b"Mozilla/5.0 (iPhone; Mobile)"),
+    )
+    unsigned = request(
+        (b"cookie", f"{API_COOKIE}=unsigned".encode()),
+        (b"user-agent", b"Mozilla/5.0 (iPhone; Mobile)"),
+    )
+    dnt = request(
+        (b"cookie", f"{API_COOKIE}={session}".encode()),
+        (b"dnt", b"1"),
+    )
+    gpc = request(
+        (b"cookie", f"{API_COOKIE}={session}".encode()),
+        (b"sec-gpc", b"1"),
+    )
+
+    assert server_mod._analytics_request_context(valid) == (session, "mobile")
+    assert server_mod._analytics_request_context(unsigned) == ("", "unknown")
+    assert server_mod._analytics_request_context(dnt) == ("", "unknown")
+    assert server_mod._analytics_request_context(gpc) == ("", "unknown")
+
+
+def test_public_runtime_captures_only_same_origin_open(monkeypatch):
+    class FakeAnalytics:
+        enabled = True
+
+        def __init__(self):
+            self.events = []
+
+        def capture(self, event, session, properties):
+            self.events.append((event, session, properties))
+            return True
+
+    analytics = FakeAnalytics()
+    monkeypatch.setattr(server_mod, "PUBLIC_WEB", True)
+    monkeypatch.setattr(server_mod, "_PRODUCT_ANALYTICS", analytics)
+    session = new_signed_session_token(server_mod._API_TOKEN)
+    headers = [
+        (b"cookie", f"{API_COOKIE}={session}".encode()),
+        (b"user-agent", b"Mozilla/5.0 (iPhone; Mobile)"),
+        (b"referer", b"http://127.0.0.1:8000/"),
+        (b"x-jobsmith-analytics-source", b"threads"),
+        (b"x-jobsmith-analytics-campaign", b"threads_202607"),
+    ]
+
+    runtime = server_mod.api_runtime(Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/api/runtime",
+        "headers": headers,
+    }))
+
+    assert runtime["analytics_enabled"] is True
+    assert analytics.events == [(
+        "web_opened",
+        session,
+        {
+            "device": "mobile",
+            "source": "threads",
+            "campaign": "threads_202607",
+        },
+    )]
+
+    invalid_origin_headers = [
+        header for header in headers if header[0] != b"referer"
+    ] + [(b"referer", b"https://attacker.example/")]
+    server_mod.api_runtime(Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/api/runtime",
+        "headers": invalid_origin_headers,
+    }))
+    assert len(analytics.events) == 1
+
+
 def test_public_origin_requires_exact_https_host():
     hosts = ("jobsmith-web.onrender.com",)
 

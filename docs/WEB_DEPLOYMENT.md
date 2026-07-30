@@ -8,6 +8,7 @@ Jobsmith 的公開 Web 模式是給手機使用者試用的精簡入口，不是
 - Profile 回傳前移除 `raw_text`；搜尋結果只留在使用者瀏覽器的 `localStorage`。
 - 每個來源最多搜尋 2 頁、最多 2 間指定公司，並有工作階段限流、有界排隊與同時搜尋限制。
 - 相同的公開職稱／地區／遠端條件會短期共用來源結果；快取鍵與內容不包含履歷、Profile 或配對分數。
+- 可選擇啟用伺服器端匿名產品事件；預設關閉，桌面版不啟用，也不記錄履歷或搜尋內容。
 - 公開模式不提供投遞包、履歷健檢、面試、記憶或設定 API。
 
 ## 用 Render 建立測試站
@@ -35,6 +36,9 @@ jobs.example.com,www.jobs.example.com
 | `JOBSMITH_PUBLIC_SEARCH_WAIT_SECONDS` | 90 | 單次最長排隊秒數 |
 | `JOBSMITH_PUBLIC_SEARCH_CACHE_TTL` | 900 | 匿名職缺來源快取秒數 |
 | `JOBSMITH_PUBLIC_SEARCH_CACHE_ENTRIES` | 64 | 最多保留的查詢條件組數 |
+| `JOBSMITH_PUBLIC_ANALYTICS` | 0 | 設為 `1` 才嘗試送出匿名產品事件 |
+| `JOBSMITH_POSTHOG_HOST` | `https://eu.i.posthog.com` | 只接受 PostHog EU 或 US ingestion host |
+| `JOBSMITH_POSTHOG_PROJECT_KEY` | 未設定 | 只放 Render Environment，不可提交到 GitHub |
 
 排隊採 FIFO；使用者會在原本的 SSE 連線中看到位置訊息，輪到時自動繼續，不需要重新送出。
 限流依簽章瀏覽器工作階段計算，避免手機電信共用 IP 讓不同使用者互相占用額度。完全失敗的來源只會
@@ -44,6 +48,12 @@ jobs.example.com,www.jobs.example.com
 免費 Render Web Service 會在閒置後休眠，第一次打開可能要等待約一分鐘；檔案系統也是暫時的。
 這正好符合目前不保存個資的預覽模式，但不適合承諾正式服務 SLA。若流量成長，應升級方案並把
 職缺抓取進一步改成跨實例快取／排程同步；目前的記憶體佇列與快取會在重新部署、重啟或休眠後清空。
+
+## 匿名流量與轉換分析
+
+若要在宣傳後查看實際開啟量、手機占比、履歷辨識／搜尋完成率、排隊與快取狀態，可啟用選配的 PostHog server-side 分析。瀏覽器不載入 PostHog SDK；事件經固定欄位白名單後由 Jobsmith 伺服器送出，DNT／GPC 會被尊重，履歷、搜尋字詞、公司、URL、原始 cookie、完整 User-Agent 與訪客 IP 都不會被轉送。
+
+建立免費專案、設定 Render 私密環境變數、建立看板與 Threads UTM 連結的完整步驟，請見[公開 Web 匿名使用分析](PRODUCT_ANALYTICS.md)。
 
 ## 本機模擬公開模式
 
@@ -75,3 +85,4 @@ docker run --rm -p 10000:10000 -e JOBSMITH_PUBLIC_COOKIE_SECURE=0 jobsmith-web
 5. 重新整理後結果仍在，但履歷檔案與履歷原文不會被還原。
 6. 確認 `/api/memory`、`/api/searches`、`/api/run` 都回 404。
 7. 清除該網站的瀏覽器資料，確認本機搜尋結果消失。
+8. 若有啟用匿名分析，確認 `/api/runtime` 回傳 `analytics_enabled: true`，且 PostHog Live events 只出現文件列出的固定事件與欄位。

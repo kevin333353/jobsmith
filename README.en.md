@@ -41,7 +41,7 @@ No app installation, AI account, or API key is required. The public Web preview 
 - Refine the current results by keyword, location, source, work mode, fit, experience, and salary without rerunning the search.
 - Wait in an automatic queue during traffic spikes; identical search scopes briefly share public job-source data to reduce latency and third-party load.
 
-The public site creates no account and does not write resumes, Profiles, personal match scores, or search history to a server database. Its short-lived shared cache contains only search keywords/scope and public job listings. Your full resume is still sent to the Jobsmith Web server for that request, so remove unnecessary phone, email, and address fields before testing. See [Privacy and Data Handling](docs/PRIVACY.md) for the exact data flow.
+The public site creates no account and does not write resumes, Profiles, personal match scores, or search history to a server database. Its short-lived shared cache contains only search keywords/scope and public job listings. Your full resume is still sent to the Jobsmith Web server for that request, so remove unnecessary phone, email, and address fields before testing. The site operator may enable server-side anonymous traffic and conversion events that exclude resume and search content; desktop telemetry remains disabled. See [Privacy and Data Handling](docs/PRIVACY.md) for the exact data flow and [Anonymous product analytics](docs/PRODUCT_ANALYTICS.md) for operator setup.
 
 The preview currently runs on free test infrastructure. A cold first visit can take about a minute, and traffic spikes can show a queue position. Use the desktop app below for AI application packages, resume audits, mock interviews, and durable local history.
 

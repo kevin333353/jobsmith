@@ -135,6 +135,7 @@ def test_runtime_and_health_endpoints_describe_desktop_process():
     assert runtime.status_code == 200
     assert runtime.json()["public_web"] is False
     assert runtime.json()["persistence_enabled"] is True
+    assert runtime.json()["analytics_enabled"] is False
     assert health.status_code == 200
     assert health.json() == {"ok": True, "mode": "desktop"}
 
