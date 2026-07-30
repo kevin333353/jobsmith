@@ -1159,6 +1159,81 @@ def test_jobs_auto_filters_jobs_by_salary_before_ranking(monkeypatch):
     assert titles == {"Match"}
 
 
+def test_jobs_auto_filters_remote_mode_and_controls_inferred_results(monkeypatch):
+    """遠端篩選預設只收來源標示；使用者明確勾選後才收 JD 文字推測。"""
+    from app.models import JobMatch, JobPosting, Profile, SearchResult
+    monkeypatch.setattr(server_mod, "structure_profile",
+                        lambda text: Profile(name="王", summary="後端", raw_text=text))
+    monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["Python"])
+    search_calls = []
+    ranked_calls = []
+
+    def fake_search(q, limit=15, pages=1, area=None,
+                    work_modes=None, include_inferred=False):
+        search_calls.append((work_modes, include_inferred))
+        return [SearchResult(source="cake", jobs=[
+            JobPosting(source="cake", title="Confirmed remote", company="A", url="w1",
+                       work_mode="remote", work_mode_origin="source"),
+            JobPosting(source="104", title="完全遠端 Backend", company="B", url="w2"),
+            JobPosting(source="linkedin", title="Hybrid", company="C", url="w3",
+                       work_mode="hybrid", work_mode_origin="source"),
+            JobPosting(source="yourator", title="Unknown", company="D", url="w4"),
+        ])]
+
+    def fake_rank(profile, jobs, top_k=None):
+        ranked_calls.append([j.title for j in jobs])
+        return [JobMatch(job=j, fit_score=70) for j in jobs]
+
+    monkeypatch.setattr(server_mod, "search_all", fake_search)
+    monkeypatch.setattr(server_mod, "rank_jobs", fake_rank)
+    client = TestClient(server_mod.app)
+
+    strict = client.post("/api/jobs/auto", data={
+        "resume_text": "Python 後端",
+        "work_mode": "remote",
+    })
+    inferred = client.post("/api/jobs/auto", data={
+        "resume_text": "Python 後端",
+        "work_mode": "remote",
+        "include_inferred_work_mode": "true",
+    })
+
+    assert not any(e["type"] == "error" for e in _parse_sse(strict.text))
+    assert not any(e["type"] == "error" for e in _parse_sse(inferred.text))
+    assert search_calls == [(["remote"], False), (["remote"], True)]
+    assert ranked_calls == [
+        ["Confirmed remote"],
+        ["Confirmed remote", "完全遠端 Backend"],
+    ]
+
+
+def test_jobs_auto_remote_filter_does_not_fall_back_to_unfiltered_samples(monkeypatch):
+    """遠端來源真的查無結果時不可塞入未經遠端驗證的 demo 職缺。"""
+    from app.models import Profile, SearchResult
+    monkeypatch.setattr(server_mod, "structure_profile",
+                        lambda text: Profile(name="王", summary="後端", raw_text=text))
+    monkeypatch.setattr(server_mod, "derive_queries", lambda profile: ["Python"])
+    monkeypatch.setattr(
+        server_mod,
+        "search_all",
+        lambda q, limit=15, pages=1, area=None, work_modes=None, include_inferred=False: [
+            SearchResult(source="104", jobs=[]),
+        ],
+    )
+    monkeypatch.setattr(server_mod, "rank_jobs", lambda profile, jobs, top_k=None: [])
+    client = TestClient(server_mod.app)
+
+    response = client.post("/api/jobs/auto", data={
+        "resume_text": "Python 後端",
+        "work_mode": "remote",
+    })
+    events = _parse_sse(response.text)
+
+    assert not any(e["type"] == "all_blocked" for e in events)
+    assert not any(e["type"] == "ranked_batch" for e in events)
+    assert events[-1]["type"] == "done"
+
+
 def test_pipeline_chat_resume_applies_update(monkeypatch):
     """履歷對話：AI 給修訂 → 端點回傳 reply + updated{summary,bullets}。"""
     from app.agents import refine as refine_mod

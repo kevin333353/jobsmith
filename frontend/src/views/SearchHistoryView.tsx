@@ -3,7 +3,12 @@ import type { MouseEvent } from "react"
 import type { UserProfile, JobMatch } from "../types"
 import { resolveJd } from "../lib/resolveJd"
 import { JobList } from "../components/jobs/JobList"
-import { FIT_FILTERS, filterByMinFit } from "../components/jobs/fitFilter"
+import { ResultRefinementBar } from "../components/jobs/ResultRefinementBar"
+import {
+  createEmptyResultRefinement,
+  filterJobMatches,
+  type ResultRefinementState,
+} from "../components/jobs/resultRefinement"
 import { Card } from "../ui/Card"
 import { EmptyState } from "../ui/EmptyState"
 import { Search, Trash2, ArrowLeft, Building2 } from "../ui/icons"
@@ -28,7 +33,9 @@ export function SearchHistoryView(
   const [list, setList] = useState<SearchSummary[]>([])
   const [detail, setDetail] = useState<SearchDetail | null>(null)
   const [busy, setBusy] = useState(false)
-  const [minFit, setMinFit] = useState(0)
+  const [resultRefinement, setResultRefinement] = useState<ResultRefinementState>(
+    createEmptyResultRefinement,
+  )
 
   async function refresh() {
     try { setList((await (await fetch("/api/searches")).json()).searches || []) }
@@ -40,6 +47,7 @@ export function SearchHistoryView(
 
   async function open(id: number) {
     setBusy(true)
+    setResultRefinement(createEmptyResultRefinement())
     try { setDetail(await (await fetch(`/api/searches/${id}`)).json()) }
     finally { setBusy(false) }
   }
@@ -57,9 +65,10 @@ export function SearchHistoryView(
     const profile: UserProfile | null = detail.profile || null
     const aiJobs: JobMatch[] = p.jobs || []
     const companyJobs: JobMatch[] = p.companyJobs || []
-    const visibleAiJobs = filterByMinFit(aiJobs, minFit)
-    const visibleCompanyJobs = filterByMinFit(companyJobs, minFit)
-    const hiddenCount = (aiJobs.length - visibleAiJobs.length) + (companyJobs.length - visibleCompanyJobs.length)
+    const allJobs = [...aiJobs, ...companyJobs]
+    const visibleAiJobs = filterJobMatches(aiJobs, resultRefinement)
+    const visibleCompanyJobs = filterJobMatches(companyJobs, resultRefinement)
+    const visibleCount = visibleAiJobs.length + visibleCompanyJobs.length
     const pick = async (m: JobMatch) => onPick(await resolveJd(m.job), profile)
     return (
       <div>
@@ -70,16 +79,15 @@ export function SearchHistoryView(
         <h2 className="font-semibold mb-1">{detail.label}</h2>
         <p className="text-sm text-slate-500 mb-4">{fmtDate(detail.created_at)}</p>
 
-        {(aiJobs.length > 0 || companyJobs.length > 0) && (
-          <div className="mb-4 flex flex-wrap items-center gap-1.5 text-sm" role="group" aria-label="適配篩選">
-            <span className="text-slate-500">適配</span>
-            {FIT_FILTERS.map((o) => (
-              <button key={o.value} type="button" onClick={() => setMinFit(o.value)} aria-pressed={minFit === o.value}
-                className={`px-2.5 py-1 rounded-lg border text-xs transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${
-                  minFit === o.value ? "bg-brand-600 text-white border-brand-600" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
-                }`}>{o.label}</button>
-            ))}
-          </div>
+        {allJobs.length > 0 && (
+          <ResultRefinementBar
+            key={detail.id}
+            matches={allJobs}
+            value={resultRefinement}
+            visibleCount={visibleCount}
+            onChange={setResultRefinement}
+            helpText="這些條件只篩選這筆搜尋紀錄，不會重新抓取職缺或使用 AI。"
+          />
         )}
 
         {aiJobs.length > 0 && (
@@ -87,7 +95,7 @@ export function SearchHistoryView(
             <h3 className="font-semibold mb-3">AI 推薦職缺（{visibleAiJobs.length} / {aiJobs.length}）</h3>
             {visibleAiJobs.length > 0
               ? <JobList matches={visibleAiJobs} onPick={pick} />
-              : <p className="text-sm text-slate-400">這個適配篩選沒有符合的職缺。</p>}
+              : <p className="text-sm text-slate-400">目前結果篩選沒有符合的職缺，放寬條件看看。</p>}
           </>
         )}
         {companyJobs.length > 0 && (
@@ -97,11 +105,8 @@ export function SearchHistoryView(
             </h3>
             {visibleCompanyJobs.length > 0
               ? <JobList matches={visibleCompanyJobs} onPick={pick} />
-              : <p className="text-sm text-slate-400">這個適配篩選沒有符合的指定公司職缺。</p>}
+              : <p className="text-sm text-slate-400">目前結果篩選沒有符合的指定公司職缺，放寬條件看看。</p>}
           </div>
-        )}
-        {hiddenCount > 0 && (
-          <p className="text-xs text-slate-400 mt-3">已依適配篩選隱藏 {hiddenCount} 筆職缺。</p>
         )}
         {busy && <p className="text-sm text-slate-400 mt-3">載入中…</p>}
       </div>

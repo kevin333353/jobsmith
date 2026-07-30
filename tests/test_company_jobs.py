@@ -34,3 +34,19 @@ def test_dedupes_same_url(monkeypatch):
         JobPosting(source="careers", title="AI", company="未來智能", url="https://x/1"),
     ]))
     assert len(cj.find_company_jobs("未來智能")) == 1   # 同 url 去重
+
+
+def test_remote_options_are_forwarded_to_board_search(monkeypatch):
+    captured = {}
+
+    def fake_search(kw, limit=15, work_modes=None, include_inferred=False):
+        captured["work_modes"] = work_modes
+        captured["include_inferred"] = include_inferred
+        return []
+
+    monkeypatch.setattr(cj, "search_all", fake_search)
+    monkeypatch.setattr(cj, "research_structured", lambda *a, **k: None)
+
+    cj.find_company_jobs("未來智能", work_modes=["remote"], include_inferred=True)
+
+    assert captured == {"work_modes": ["remote"], "include_inferred": True}

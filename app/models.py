@@ -209,6 +209,14 @@ class JobPosting(BaseModel):
     raw_text: str = Field(default="", description="原始職缺全文，供後續解析")
     experience_text: str | None = Field(default=None, description="來源文字中的年資要求片段")
     min_years: float | None = Field(default=None, description="解析出的最低年資要求")
+    work_mode: Literal["remote", "hybrid", "onsite", "unknown"] = Field(
+        default="unknown",
+        description="工作型態：remote | hybrid | onsite | unknown",
+    )
+    work_mode_origin: Literal["source", "inferred", "unknown"] = Field(
+        default="unknown",
+        description="工作型態依據：source（來源明確標示）| inferred（JD 文字推測）| unknown",
+    )
 
     @model_validator(mode="after")
     def _infer_experience(self):
@@ -222,6 +230,26 @@ class JobPosting(BaseModel):
             )
             self.min_years = min_years
             self.experience_text = text
+        return self
+
+    @model_validator(mode="after")
+    def _infer_work_mode(self):
+        if self.work_mode != "unknown":
+            if self.work_mode_origin == "unknown":
+                self.work_mode_origin = "source"
+            return self
+        self.work_mode_origin = "unknown"
+        from app.sources.work_mode import infer_work_mode
+        mode = infer_work_mode(
+            self.title,
+            self.location,
+            self.snippet,
+            " ".join(str(r) for r in self.requirements),
+            self.raw_text,
+        )
+        if mode != "unknown":
+            self.work_mode = mode
+            self.work_mode_origin = "inferred"
         return self
 
 

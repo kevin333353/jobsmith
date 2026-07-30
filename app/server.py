@@ -35,6 +35,7 @@ from app.security import (
     set_session_cookie,
 )
 from app.sources import regions
+from app.sources import work_mode as work_mode_filter
 from app.sources.registry import linkedin_search_url, search_all
 from app.sources.salary import filter_jobs_by_salary, monthly_salary_bounds
 from app.store import db as _appdb
@@ -435,6 +436,8 @@ def jobs_auto(
     companies: str = Form(default=""),
     pages: int = Form(default=2),
     region: str = Form(default=""),
+    work_mode: str = Form(default=""),
+    include_inferred_work_mode: bool = Form(default=False),
     max_experience_years: float | None = Form(default=None),
     salary_unit: str = Form(default="monthly"),
     min_salary: float | None = Form(default=None),
@@ -447,6 +450,8 @@ def jobs_auto(
     pages：每個來源抓幾頁（使用者可在前端調整，預設 2、夾在 1–5）。
     region：搜尋前選定的縣市（逗號串接 key）。對所有來源一致生效——104 於來源端用 area
             代碼篩選（涵蓋更全），其餘來源在結果端用 location 過濾，使用者看到的就是同一份地區結果。
+    work_mode：remote / hybrid（逗號串接）。預設只接受來源明確標示；
+               include_inferred_work_mode=true 時才納入 JD 文字推測。
     """
     pages = max(1, min(5, pages))
     max_experience_years = (
@@ -459,6 +464,7 @@ def jobs_auto(
     )
     region_keys = regions.parse_keys(region)
     area = regions.area_codes(region_keys)
+    work_mode_keys = work_mode_filter.parse_work_modes(work_mode)
     text, text_error = _resume_text_from_request(file, resume_text)
     posted_profile, profile_error = (None, None) if text.strip() else _profile_from_json(profile_json)
     company_list = _parse_companies(companies)
@@ -509,13 +515,24 @@ def jobs_auto(
             for q in queries[:3]:
                 token.check()
                 yield _sse({"type": "progress", "step": "search", "message": f"搜尋「{q}」中…"})
-                for res in search_all(q, limit=15, pages=pages, area=area):
+                search_kwargs = {}
+                if work_mode_keys:
+                    search_kwargs = {
+                        "work_modes": work_mode_keys,
+                        "include_inferred": include_inferred_work_mode,
+                    }
+                for res in search_all(q, limit=15, pages=pages, area=area, **search_kwargs):
                     token.check()
                     # 104 已於來源端用 area 篩過；其餘來源在結果端依 location 過濾，地區一致生效。
                     region_kept = [j for j in res.jobs
                                    if res.source == "104" or regions.match_location(j.location, region_keys)]
                     region_matched_count += len(region_kept)
-                    kept = _filter_jobs_by_experience(region_kept, max_experience_years)
+                    work_mode_kept = work_mode_filter.filter_jobs_by_work_mode(
+                        region_kept,
+                        work_mode_keys,
+                        include_inferred=include_inferred_work_mode,
+                    )
+                    kept = _filter_jobs_by_experience(work_mode_kept, max_experience_years)
                     kept = filter_jobs_by_salary(
                         kept,
                         min_monthly=min_salary_monthly,
@@ -533,7 +550,7 @@ def jobs_auto(
 
             # 誠實降級：AI 搜尋零結果 → 告知並改用後備樣本職缺，demo 永遠有東西看。
             used_fallback = False
-            if not resume_jobs and region_matched_count == 0:
+            if not resume_jobs and region_matched_count == 0 and not work_mode_keys:
                 used_fallback = True
                 yield _sse({"type": "all_blocked",
                             "message": "即時職缺來源暫時取得不到結果，以下改用範例職缺示意，"
@@ -551,7 +568,11 @@ def jobs_auto(
                 yield _sse({"type": "ranked_batch", "data": [m.model_dump() for m in batch]})
             li_loc = f"{region_keys[0]}, Taiwan" if region_keys else "Taiwan"
             yield _sse({"type": "linkedin",
-                        "url": linkedin_search_url(queries[0] if queries else "", li_loc)})
+                        "url": linkedin_search_url(
+                            queries[0] if queries else "",
+                            li_loc,
+                            work_mode_keys,
+                        )})
 
             # ② 使用者指定的公司開缺：與 AI 搜尋『分開』收集、分開排序、分開顯示，
             # 避免低適配的公司職缺佔據 AI 推薦名單前段、又吃掉排序名額。
@@ -561,9 +582,20 @@ def jobs_auto(
                 yield _sse({"type": "progress", "step": "company",
                             "message": f"查「{company}」的開缺中…"})
                 try:
-                    found = find_company_jobs(company, profile)
+                    company_search_kwargs = {}
+                    if work_mode_keys:
+                        company_search_kwargs = {
+                            "work_modes": work_mode_keys,
+                            "include_inferred": include_inferred_work_mode,
+                        }
+                    found = find_company_jobs(company, profile, **company_search_kwargs)
                 except Exception:
                     found = []
+                found = work_mode_filter.filter_jobs_by_work_mode(
+                    found,
+                    work_mode_keys,
+                    include_inferred=include_inferred_work_mode,
+                )
                 found = _filter_jobs_by_experience(found, max_experience_years)
                 found = filter_jobs_by_salary(
                     found,

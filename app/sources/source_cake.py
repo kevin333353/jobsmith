@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from app.models import JobPosting, SearchResult
 from app.sources.base import clean, http_get
+from app.sources.work_mode import filter_jobs_by_work_mode
 
 NAME = "cake"
 SEARCHABLE = True
@@ -41,61 +42,96 @@ def _format_salary(s) -> str | None:
     return f"{label} {amount}".strip()
 
 
+def _search_variants(
+    work_modes: list[str] | None,
+    include_inferred: bool,
+) -> list[tuple[str, str | None]]:
+    modes = set(work_modes or [])
+    if not modes:
+        return [("", None)]
+    variants: list[tuple[str, str | None]] = []
+    if "remote" in modes:
+        variants.append(("&remote=full_remote_work", "remote"))
+    if "hybrid" in modes:
+        variants.append(("&remote=partial_remote_work%2Coptional_remote_work", "hybrid"))
+    if include_inferred:
+        variants.append(("", None))
+    return variants
+
+
 def search(keywords: str, limit: int = 15, pages: int = 1,
-           area: list[str] | None = None) -> SearchResult:
+           area: list[str] | None = None, work_modes: list[str] | None = None,
+           include_inferred: bool = False) -> SearchResult:
     """搜尋 Cake；pages>1 時逐頁抓取（網址帶 page 參數）並跨頁去重。
 
     area：保留參數，本來源不支援來源端地區篩選（地區由結果端 location 過濾處理）。
+    work_modes：以 Cake 官方 full/partial/optional remote 篩選分開查詢並標記來源依據。
     """
     jobs: list[JobPosting] = []
     seen: set[str] = set()
     cap = limit * max(1, pages)
-    first_error = None
-    for pg in range(1, max(1, pages) + 1):
-        try:
-            r = http_get(_PAGE.format(kw=quote(keywords), page=pg))
-            if not r.ok:
-                first_error = f"HTTP {r.status_code}"
+    first_error: str | None = None
+    any_parsed_response = False
+    for mode_q, confirmed_mode in _search_variants(work_modes, include_inferred):
+        variant_added = 0
+        for pg in range(1, max(1, pages) + 1):
+            try:
+                r = http_get(_PAGE.format(kw=quote(keywords), page=pg) + mode_q)
+                if not r.ok:
+                    if first_error is None:
+                        first_error = f"HTTP {r.status_code}"
+                    break
+                m = _NEXT.search(r.text)
+                if not m:
+                    if first_error is None:
+                        first_error = "找不到 __NEXT_DATA__"
+                    break
+                data = json.loads(m.group(1))
+                entities = (data.get("props", {}).get("pageProps", {})
+                            .get("initialState", {}).get("jobSearch", {}).get("entityByPathId", {}))
+                any_parsed_response = True
+            except Exception as e:
+                if first_error is None:
+                    first_error = str(e)[:150]
                 break
-            m = _NEXT.search(r.text)
-            if not m:
-                first_error = "找不到 __NEXT_DATA__"
-                break
-            data = json.loads(m.group(1))
-            entities = (data.get("props", {}).get("pageProps", {})
-                        .get("initialState", {}).get("jobSearch", {}).get("entityByPathId", {}))
-        except Exception as e:
-            first_error = str(e)[:150]
-            break
 
-        before = len(jobs)
-        for d in (entities or {}).values():
-            if not isinstance(d, dict) or not d.get("title") or not d.get("path"):
-                continue
-            page = d.get("page") if isinstance(d.get("page"), dict) else {}
-            company_path = page.get("path") or ""
-            url = (f"https://www.cake.me/companies/{company_path}/jobs/{d['path']}"
-                   if company_path else f"https://www.cake.me/jobs/{d['path']}")
-            if url in seen:
-                continue
-            seen.add(url)
-            locs = d.get("locations") or []
-            location = "、".join(str(x) for x in locs) if isinstance(locs, list) else None
-            tags = d.get("tags") or []
-            jobs.append(JobPosting(
-                source=NAME,
-                title=clean(d.get("title") or ""),
-                company=clean(page.get("name") or ""),
-                location=clean(location) or None,
-                salary=_format_salary(d.get("salary")),
-                url=url,
-                snippet=clean((d.get("description") or "")[:200]) or None,
-                requirements=[str(t) for t in tags][:10] if isinstance(tags, list) else [],
-            ))
-            if len(jobs) >= cap:
-                break
-        if len(jobs) >= cap or len(jobs) - before == 0:
-            break  # 已達上限，或這一頁沒有新職缺 → 停止翻頁
-    if not jobs:
+            before = variant_added
+            for d in (entities or {}).values():
+                if not isinstance(d, dict) or not d.get("title") or not d.get("path"):
+                    continue
+                page = d.get("page") if isinstance(d.get("page"), dict) else {}
+                company_path = page.get("path") or ""
+                url = (f"https://www.cake.me/companies/{company_path}/jobs/{d['path']}"
+                       if company_path else f"https://www.cake.me/jobs/{d['path']}")
+                if url in seen:
+                    continue
+                seen.add(url)
+                locs = d.get("locations") or []
+                location = "、".join(str(x) for x in locs) if isinstance(locs, list) else None
+                tags = d.get("tags") or []
+                jobs.append(JobPosting(
+                    source=NAME,
+                    title=clean(d.get("title") or ""),
+                    company=clean(page.get("name") or ""),
+                    location=clean(location) or None,
+                    salary=_format_salary(d.get("salary")),
+                    url=url,
+                    snippet=clean((d.get("description") or "")[:200]) or None,
+                    requirements=[str(t) for t in tags][:10] if isinstance(tags, list) else [],
+                    work_mode=confirmed_mode or "unknown",
+                    work_mode_origin="source" if confirmed_mode else "unknown",
+                ))
+                variant_added += 1
+                if variant_added >= cap:
+                    break
+            if variant_added >= cap or variant_added - before == 0:
+                break  # 已達上限，或這一頁沒有新職缺 → 停止翻頁
+
+    jobs = filter_jobs_by_work_mode(
+        jobs,
+        work_modes,
+        include_inferred=include_inferred,
+    )
+    if not jobs and (not any_parsed_response or not work_modes):
         return SearchResult(source=NAME, blocked=True, error=first_error or "解析不到職缺")
     return SearchResult(source=NAME, jobs=jobs)
