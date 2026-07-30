@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: jobsmith-web
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: JOBSMITH_PUBLIC_WEB
+        value: "1"
+      - key: JOBSMITH_PUBLIC_COOKIE_SECURE
+        value: "1"
+      - key: JOBSMITH_PUBLIC_PREVIEW_CONCURRENCY
+        value: "2"
+      - key: JOBSMITH_PUBLIC_SEARCH_CONCURRENCY
+        value: "3"
+      - key: JOBSMITH_PUBLIC_SEARCH_QUEUE
+        value: "12"
+      - key: JOBSMITH_PUBLIC_SEARCH_WAIT_SECONDS
+        value: "90"
+      - key: JOBSMITH_PUBLIC_SEARCH_CACHE_TTL
+        value: "900"
+      - key: JOBSMITH_PUBLIC_SEARCH_CACHE_ENTRIES
+        value: "64"

@@ -1,4 +1,5 @@
 """② 匹配 Agent：對 ParsedJob 與 Profile 打分。"""
+from app.agents.prompt_context import profile_prompt_json
 from app.llm import get_llm
 from app.models import MatchReport, ParsedJob, Profile
 
@@ -17,6 +18,6 @@ def match_profile(job: ParsedJob, profile: Profile) -> MatchReport:
         "【職缺】\n"
         f"{job.model_dump_json(indent=2)}\n\n"
         "【求職者背景】\n"
-        f"{profile.model_dump_json(indent=2)}"
+        f"{profile_prompt_json(profile)}"
     )
     return llm.invoke([("system", MATCH_SYSTEM), ("human", human)])

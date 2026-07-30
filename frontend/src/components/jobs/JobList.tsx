@@ -28,9 +28,25 @@ function FitBadge({ score }: { score: number }) {
   )
 }
 
-function JobCard({ m, onPick, pending }: { m: JobMatch; onPick: (m: JobMatch) => void; pending?: boolean }) {
+function evidenceLabel(level?: JobMatch["evidence_level"]) {
+  if (level === "high") return "資料完整度高"
+  if (level === "medium") return "資料完整度中"
+  if (level === "low") return "資料完整度低"
+  return ""
+}
+
+function JobCard(
+  { m, onPick, pending, allowPackageGeneration }:
+  {
+    m: JobMatch
+    onPick: (m: JobMatch) => void
+    pending?: boolean
+    allowPackageGeneration: boolean
+  },
+) {
   const exp = jobExperienceLabel(m.job)
   const workMode = jobWorkModeBadge(m.job)
+  const evidence = evidenceLabel(m.evidence_level)
   return (
     <Card interactive className="p-4 flex flex-col sm:flex-row gap-4 animate-fade-in-up">
       <FitBadge score={m.fit_score} />
@@ -40,6 +56,7 @@ function JobCard({ m, onPick, pending }: { m: JobMatch; onPick: (m: JobMatch) =>
             className="font-medium text-slate-900 hover:text-brand-700 hover:underline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">{m.job.title}</a>
           <Badge tone={m.job.source === "careers" ? "brand" : "slate"}>{SRC_LABEL[m.job.source] || m.job.source}</Badge>
           {workMode && <Badge tone={workMode.tone}>{workMode.label}</Badge>}
+          {evidence && <Badge tone="slate">{evidence}</Badge>}
         </div>
         <p className="text-sm text-slate-600 mt-0.5">
           {m.job.company}
@@ -53,9 +70,16 @@ function JobCard({ m, onPick, pending }: { m: JobMatch; onPick: (m: JobMatch) =>
             {m.matched.map((t, k) => <Badge key={k} tone="emerald">{t}</Badge>)}
           </div>
         )}
+        {m.gaps.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            {m.gaps.slice(0, 4).map((t, k) => <Badge key={k} tone="amber">待確認：{t}</Badge>)}
+          </div>
+        )}
       </div>
       <div className="shrink-0 flex flex-row sm:flex-col gap-2">
-        <Button size="sm" icon={Sparkles} loading={pending} onClick={() => onPick(m)} className="whitespace-nowrap">產生投遞包</Button>
+        {allowPackageGeneration && (
+          <Button size="sm" icon={Sparkles} loading={pending} onClick={() => onPick(m)} className="whitespace-nowrap">產生投遞包</Button>
+        )}
         <a href={m.job.url} target="_blank" rel="noreferrer"
           className="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-sm hover:bg-slate-200 transition whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
           <ExternalLink className="w-3.5 h-3.5" />看原職缺
@@ -66,8 +90,12 @@ function JobCard({ m, onPick, pending }: { m: JobMatch; onPick: (m: JobMatch) =>
 }
 
 // 可分頁的職缺清單；onPick 可為 async（抓完整 JD 時該卡按鈕顯示載入中）。
-export function JobList({ matches, onPick }:
-  { matches: JobMatch[]; onPick: (m: JobMatch) => void | Promise<void> }) {
+export function JobList({ matches, onPick, allowPackageGeneration = true }:
+  {
+    matches: JobMatch[]
+    onPick: (m: JobMatch) => void | Promise<void>
+    allowPackageGeneration?: boolean
+  }) {
   const [page, setPage] = useState(1)
   const [pendingUrl, setPendingUrl] = useState("")
   // 新一輪結果（matches 參考改變）→ 在 render 期回到第 1 頁（React 官方「prop 改變時
@@ -91,7 +119,13 @@ export function JobList({ matches, onPick }:
     <>
       <div className="space-y-3">
         {matches.slice((cur - 1) * PAGE_SIZE, cur * PAGE_SIZE).map((m, i) => (
-          <JobCard key={i} m={m} onPick={handle} pending={!!pendingUrl && m.job.url === pendingUrl} />
+          <JobCard
+            key={i}
+            m={m}
+            onPick={handle}
+            pending={!!pendingUrl && m.job.url === pendingUrl}
+            allowPackageGeneration={allowPackageGeneration}
+          />
         ))}
       </div>
       {matches.length > PAGE_SIZE && (

@@ -1,4 +1,5 @@
 """⑤ 面試準備 Agent。"""
+from app.agents.prompt_context import profile_prompt_json
 from app.llm import get_llm
 from app.models import CompanyBrief, InterviewKit, ParsedJob, Profile
 
@@ -18,7 +19,7 @@ def prepare_interview(job: ParsedJob, profile: Profile, company: CompanyBrief | 
         "【職缺】\n"
         f"{job.model_dump_json(indent=2)}\n\n"
         "【求職者背景】\n"
-        f"{profile.model_dump_json(indent=2)}\n\n"
+        f"{profile_prompt_json(profile)}\n\n"
         "【公司情報】\n"
         f"{company_json}"
     )

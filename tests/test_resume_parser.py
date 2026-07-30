@@ -1,5 +1,8 @@
 from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
+
+import pytest
 
 from app.intake import resume_parser as rp
 
@@ -24,6 +27,16 @@ def test_extract_text_docx():
     text = rp.extract_text(buf.getvalue(), "resume.docx")
     assert "王小明" in text
     assert "後端工程師" in text
+
+
+def test_extract_text_docx_rejects_excessive_expanded_archive(monkeypatch):
+    monkeypatch.setattr(rp, "MAX_DOCX_EXPANDED_BYTES", 8)
+    buf = BytesIO()
+    with ZipFile(buf, "w") as archive:
+        archive.writestr("[Content_Types].xml", "x" * 9)
+
+    with pytest.raises(ValueError, match="expanded content"):
+        rp.extract_text(buf.getvalue(), "resume.docx")
 
 
 def test_extract_text_pdf():

@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react"
 import { Brand } from "../ui/Brand"
 import { Button } from "../ui/Button"
-import { Cpu, CheckCircle2, XCircle, Loader2, ArrowRight, KeyRound } from "../ui/icons"
+import {
+  Cpu,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  ArrowRight,
+  KeyRound,
+  ShieldCheck,
+} from "../ui/icons"
 import { newTaskId, stopTask } from "../lib/taskControl"
 import {
   LOCAL_MODEL_PROVIDERS,
@@ -209,13 +217,34 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: ()
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm grid place-items-center p-4">
-      <div className="w-full max-w-lg bg-white rounded-xl2 shadow-cardHover p-6 animate-fade-in-up">
+      <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto bg-white rounded-xl2 shadow-cardHover p-6 animate-fade-in-up">
         <div className="mb-5"><Brand /></div>
-        <h1 className="text-lg font-bold text-slate-900 mb-1">選擇 AI 後端</h1>
+        <h1 className="text-lg font-bold text-slate-900 mb-1">開始使用 Jobsmith</h1>
         <p className="text-sm text-slate-500 mb-4">
-          可以使用本機 Claude/Codex CLI、本機模型，或 OpenAI 相容端點 (BYOK)。選好後可先測試連線。
+          找職缺不需要 AI 帳號或 API key，可以直接開始。只有履歷健檢、投遞文件與面試功能才需要設定 AI。
         </p>
 
+        <button
+          type="button"
+          onClick={onSkip || onDone}
+          className="mb-5 flex w-full items-center gap-3 rounded-xl border border-emerald-300 bg-emerald-50 p-4 text-left transition hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+        >
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-emerald-600 text-white">
+            <ShieldCheck className="h-5 w-5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block font-semibold text-emerald-950">先用免 AI 找職缺</span>
+            <span className="mt-0.5 block text-sm text-emerald-700">
+              上傳履歷即可搜尋與配對 · 0 AI 呼叫
+            </span>
+          </span>
+          <ArrowRight className="h-4 w-4 shrink-0 text-emerald-700" />
+        </button>
+
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-sm font-semibold text-slate-700">AI 功能（選填）</span>
+          <span className="text-xs text-slate-400">也可以之後從右上角設定</span>
+        </div>
         <div className="space-y-2.5">
           {options.map((o) => {
             const active = selected === o.id
@@ -315,20 +344,17 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip?: ()
           </div>
         )}
 
-        <div className="mt-5 flex items-center gap-3">
+        <div className="mt-5 flex flex-wrap items-center gap-3">
           <Button variant="secondary" onClick={test} loading={testing}
             disabled={!selected || starting}
             icon={testing ? undefined : selectedKind === "byok" ? KeyRound : Cpu}>
             {testing ? "測試中…" : "測試連線"}
           </Button>
           {testing && <Button variant="danger" onClick={stopTest} icon={XCircle}>停止</Button>}
-          <Button onClick={start} loading={starting} disabled={!selected || testing} icon={ArrowRight}>
-            開始使用
+          <Button variant="secondary" onClick={start} loading={starting}
+            disabled={!selected || testing} icon={ArrowRight}>
+            儲存 AI 設定
           </Button>
-          <button type="button" onClick={onSkip || onDone}
-            className="ml-auto text-sm text-slate-400 hover:text-slate-600 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
-            跳過
-          </button>
         </div>
         {testing && (
           <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">

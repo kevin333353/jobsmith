@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import re
 from io import BytesIO
+from zipfile import BadZipFile, ZipFile
 
 # 控制字元（含 NUL \x00）會殘留在 UTF-16 存的 .txt、或某些 PDF 的抽取結果裡。
 # \x00 之後被當成 CLI 參數丟進 subprocess 會直接 ValueError("embedded null byte")，
 # 其餘 C0/C1 控制字元也只是 LLM 雜訊。保留常見空白（\t \n \r），其餘一律移除。
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 MAX_PDF_PAGES = 20
+MAX_DOCX_ENTRIES = 500
+MAX_DOCX_EXPANDED_BYTES = 25 * 1024 * 1024
 
 
 def _clean(text: str) -> str:
@@ -43,5 +46,13 @@ def _extract_pdf(data: bytes) -> str:
 def _extract_docx(data: bytes) -> str:
     from docx import Document
 
+    try:
+        with ZipFile(BytesIO(data)) as archive:
+            entries = archive.infolist()
+            expanded_bytes = sum(entry.file_size for entry in entries)
+            if len(entries) > MAX_DOCX_ENTRIES or expanded_bytes > MAX_DOCX_EXPANDED_BYTES:
+                raise ValueError("DOCX expanded content is too large")
+    except BadZipFile as exc:
+        raise ValueError("invalid DOCX file") from exc
     doc = Document(BytesIO(data))
     return "\n".join(p.text for p in doc.paragraphs).strip()

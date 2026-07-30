@@ -7,9 +7,9 @@ import {
 
 const STEPS = [
   {
-    title: "連接 AI 後端",
-    body: "Jobsmith 會使用你選擇的 Claude Code、Codex CLI，或 OpenAI 相容端點產生內容。",
-    icon: Cpu,
+    title: "免 AI 也能直接開始",
+    body: "預設模式會在本機辨識履歷、搜尋多個求職網站並解釋配對原因，不需要 AI 帳號、API key 或 token。",
+    icon: Search,
   },
   {
     title: "提供履歷",
@@ -23,7 +23,7 @@ const STEPS = [
   },
   {
     title: "找職缺並產生投遞包",
-    body: "從自動找職缺開始，選定職缺後再產生客製履歷、求職信與面試準備內容。",
+    body: "先用免 AI 模式找、篩選及收藏職缺；確定要投某一筆時，再選擇是否設定 AI 產生客製文件。",
     icon: Workflow,
   },
 ]
@@ -51,7 +51,7 @@ export function FirstRunGuide(
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm grid place-items-center p-4">
-      <div className="w-full max-w-xl bg-white rounded-xl2 shadow-cardHover p-6 animate-fade-in-up">
+      <div className="max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto bg-white rounded-xl2 shadow-cardHover p-6 animate-fade-in-up">
         <div className="flex items-start justify-between gap-4 mb-5">
           <Brand />
           <button
@@ -108,10 +108,15 @@ export function FirstRunGuide(
             <Button icon={ArrowRight} onClick={() => setPage((p) => Math.min(STEPS.length - 1, p + 1))}>
               下一步
             </Button>
-          ) : backendReady ? (
-            <Button icon={Search} onClick={() => finish("start")}>開始找職缺</Button>
           ) : (
-            <Button icon={Cpu} onClick={() => finish("backend")}>設定 AI 後端</Button>
+            <>
+              <Button icon={Search} onClick={() => finish("start")}>開始免 AI 找職缺</Button>
+              {!backendReady && (
+                <Button variant="secondary" icon={Cpu} onClick={() => finish("backend")}>
+                  設定 AI（選填）
+                </Button>
+              )}
+            </>
           )}
 
           <button

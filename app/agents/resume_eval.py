@@ -1,6 +1,7 @@
 """② 履歷健檢 Agent：把履歷全文結構化成 Profile，並做健檢評分。"""
 import re
 
+from app.agents.role_taxonomy import infer_known_roles
 from app.agents.skill_lexicon import extract_skills
 from app.llm import get_llm
 from app.models import Profile, ResumeAssessment, ResumeIssue, ResumeRewrite
@@ -22,19 +23,12 @@ EVAL_SYSTEM = (
     "務實具體、不空泛，不要捏造未提供的經歷。全程使用繁體中文。"
 )
 
-_ROLE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("AI 工程師", ("ai", "llm", "machine learning", "ml", "rag", "openai", "pytorch")),
-    ("前端工程師", ("frontend", "front-end", "react", "vue", "javascript", "typescript")),
-    ("後端工程師", ("backend", "back-end", "fastapi", "django", "flask", "node.js", "api")),
-    ("全端工程師", ("full stack", "full-stack", "frontend", "backend")),
-    ("資料工程師", ("data engineer", "etl", "spark", "airflow", "bigquery")),
-    ("資料分析師", ("data analyst", "analytics", "tableau", "power bi")),
-    ("DevOps 工程師", ("devops", "kubernetes", "docker", "terraform", "ci/cd", "aws")),
-)
-
 _EXPERIENCE_MARKERS = (
     "built", "developed", "designed", "implemented", "managed", "led", "optimized",
-    "created", "improved", "reduced", "increased", "負責", "開發", "建立", "導入", "優化",
+    "created", "improved", "reduced", "increased", "coordinated", "served", "maintained",
+    "processed", "prepared", "assisted", "taught", "cared", "sold", "audited", "inspected",
+    "operated", "負責", "開發", "建立", "導入", "優化", "管理", "協調", "執行", "規劃",
+    "服務", "維護", "處理", "教學", "照護", "銷售", "稽核", "檢驗", "操作", "達成",
 )
 _EDUCATION_MARKERS = (
     "university", "college", "bachelor", "master", "phd", "degree",
@@ -112,11 +106,31 @@ _TITLE_WORDS = (
     "經理", "工程師", "設計師", "分析師", "規劃師", "架構師", "總監", "協理", "副理",
     "專員", "主任", "組長", "課長", "顧問", "助理", "業務", "行銷", "企劃", "採購",
     "會計", "財務", "人資", "客服", "編輯", "記者", "醫師", "護理", "教師", "律師",
+    "行政人員", "秘書", "法務", "研究員", "研究助理", "門市", "店長", "店員",
+    "服務員", "服務生", "廚師", "咖啡師", "司機", "駕駛", "作業員", "技術員",
+    "操作員", "倉管", "理貨", "保全", "警衛", "清潔", "房務", "藥師", "社工師",
+    "翻譯", "房仲", "美容師", "美髮師",
     "manager", "engineer", "developer", "designer", "analyst", "architect",
     "director", "specialist", "consultant", "lead", "scientist", "coordinator",
-    "associate", "officer", "accountant", "marketing", "sales",
+    "associate", "officer", "accountant", "marketing", "sales", "nurse", "physician",
+    "pharmacist", "teacher", "attorney", "lawyer", "researcher", "editor", "journalist",
+    "reporter", "driver", "chef", "cook", "barista", "technician", "operator",
+    "administrator", "secretary", "clerk", "server", "cashier", "warehouse", "security",
+    "cleaner", "housekeeper", "translator", "interpreter",
 )
 _TITLE_SPLIT_RE = re.compile(r"[/|｜、,，()（）\[\]【】:：]")
+_EXPLICIT_YEARS_PATTERNS = (
+    re.compile(
+        r"(?:總年資|工作年資|年資|工作經驗|相關經驗|專業經驗|experience)"
+        r"\s*[:：]?\s*(\d+(?:\.\d+)?)\s*\+?\s*(?:年|years?)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(\d+(?:\.\d+)?)\s*\+?\s*(?:年|years?)"
+        r"\s*(?:以上)?\s*(?:工作|相關|專業)?\s*(?:經驗|experience)",
+        re.IGNORECASE,
+    ),
+)
 
 
 def _infer_title_role(lines: list[str]) -> str:
@@ -133,17 +147,31 @@ def _infer_title_role(lines: list[str]) -> str:
 
 
 def _infer_roles(resume_text: str, skills: list[str]) -> list[str]:
-    blob = " ".join([resume_text or "", " ".join(skills)]).lower()
-    roles = [role for role, markers in _ROLE_RULES if any(marker in blob for marker in markers)]
-    out: list[str] = []
-    for role in roles:
-        if role not in out:
-            out.append(role)
-    if out:
-        return out[:4]
-    # 軟體角色規則全沒中（非軟體履歷）→ 先用履歷自己的職稱行，最後才退到泛稱。
+    blob = " ".join([resume_text or "", " ".join(skills)])
     title = _infer_title_role(_resume_lines(resume_text))
-    return [title] if title else ["工程師"]
+    title_roles = infer_known_roles(title, limit=1) if title else []
+    roles = title_roles + [
+        role for role in infer_known_roles(blob, limit=4)
+        if role not in title_roles
+    ]
+    if roles:
+        return roles[:4]
+    # 詞庫全沒中 → 先用履歷自己的職稱行，最後才退到泛稱。
+    return [title] if title else ["一般職缺"]
+
+
+def _infer_years_experience(resume_text: str) -> float | None:
+    """Read only explicit experience statements; do not infer from date ranges."""
+    candidates: list[float] = []
+    for pattern in _EXPLICIT_YEARS_PATTERNS:
+        for raw in pattern.findall(resume_text or ""):
+            try:
+                years = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= years <= 50:
+                candidates.append(years)
+    return max(candidates) if candidates else None
 
 
 def _fallback_profile_from_text(resume_text: str) -> Profile:
@@ -167,10 +195,18 @@ def _fallback_profile_from_text(resume_text: str) -> Profile:
         skills=skills,
         experiences=experiences,
         education=education,
+        years_experience=_infer_years_experience(resume_text),
         preferred_roles=roles,
         raw_text=resume_text,
         parse_degraded=True,  # 本機備援 → 標記降級，供前端提示使用者檢查 AI 後端
     )
+
+
+def structure_profile_local(resume_text: str) -> Profile:
+    """Resume text → first-class deterministic Profile with zero LLM calls."""
+    profile = _fallback_profile_from_text(resume_text)
+    profile.parse_degraded = False
+    return profile
 
 
 def _repair_profile(profile: Profile, resume_text: str) -> Profile:
@@ -191,6 +227,8 @@ def _repair_profile(profile: Profile, resume_text: str) -> Profile:
         profile.experiences = fallback.experiences
     if not profile.education:
         profile.education = fallback.education
+    if profile.years_experience is None:
+        profile.years_experience = fallback.years_experience
     if not profile.preferred_roles:
         profile.preferred_roles = fallback.preferred_roles
     if not profile.raw_text:

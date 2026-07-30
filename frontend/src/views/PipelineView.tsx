@@ -1,8 +1,25 @@
 import { useEffect, useRef, useState } from "react"
-import type { CandidateProfile, PipelineState, Seed, UserProfile, TelemetryEntry, Preferences } from "../types"
+import type {
+  CandidateProfile,
+  GenerationOptions,
+  JobMatch,
+  PipelineState,
+  Seed,
+  UserProfile,
+  TelemetryEntry,
+  Preferences,
+} from "../types"
 import { AgentTrace } from "../components/pipeline/AgentTrace"
+import { GenerationOptionsPanel } from "../components/pipeline/GenerationOptionsPanel"
 import { CandidateProfileManager } from "../components/CandidateProfileManager"
 import { makeCandidateProfile, profileDisplayName } from "../lib/profiles"
+import {
+  QUICK_GENERATION,
+  generationPayload,
+  normalizeGenerationOptions,
+  optionsFromPipelineState,
+  searchAnalysisPayload,
+} from "../lib/packageGeneration"
 import {
   MatchCard, CompanyCard, ResumeDoc, CoverLetterDoc, InterviewKitDoc, CritiqueCard,
 } from "../components/pipeline/Documents"
@@ -46,11 +63,14 @@ export function PipelineView(
   const [jd, setJd] = useState("")
   const [manualJd, setManualJd] = useState("")
   const [pendingJd, setPendingJd] = useState("")
+  const [pendingMatch, setPendingMatch] = useState<JobMatch | null>(null)
   const [phase, setPhase] = useState<Phase>("idle")
   const [status, setStatus] = useState("")
   const [done, setDone] = useState<string[]>([])
   const [state, setState] = useState<PipelineState>({})
-  const [revisions, setRevisions] = useState(0)
+  const [generationOptions, setGenerationOptions] = useState<GenerationOptions>(
+    () => ({ ...QUICK_GENERATION, artifactTargets: [...QUICK_GENERATION.artifactTargets] }),
+  )
   const [telemetry, setTelemetry] = useState<TelemetryEntry[]>([])
   const [nodeErrors, setNodeErrors] = useState<{ node: string; message: string }[]>([])
   const [profileWarning, setProfileWarning] = useState("")
@@ -63,14 +83,16 @@ export function PipelineView(
 
   function resetView() {
     setError(""); setNodeErrors([]); setProfileWarning(""); setTelemetry([])
-    setDone([]); setState({}); setRevisions(0); setPage(0)
+    setDone([]); setState({}); setPage(0)
   }
 
   function applyEvent(ev: RunEvent) {
-    if (ev.type === "node") {
+    if (ev.type === "config" && ev.data) {
+      setGenerationOptions(optionsFromPipelineState(ev.data))
+      setState((current) => ({ ...current, ...ev.data }))
+    } else if (ev.type === "node") {
       setDone((d) => [...d, ev.node as string])
       if (ev.data) setState((s) => ({ ...s, ...ev.data }))
-      if (ev.node === "critic" && ev.data?.revision_count) setRevisions(ev.data.revision_count)
     } else if (ev.type === "node_error") {
       setNodeErrors((e) => [...e, { node: ev.node as string, message: ev.message || "" }])
     } else if (ev.type === "profile_warning") {
@@ -140,7 +162,9 @@ export function PipelineView(
       const d = await (await fetch(`/api/history/${packageId}`)).json()
       if (d && d.package) {
         const pkg = d.package as PipelineState
-        setState(pkg); if (d.jd_text) setJd(d.jd_text)
+        setState(pkg)
+        setGenerationOptions(optionsFromPipelineState(pkg))
+        if (d.jd_text) setJd(d.jd_text)
         // 已完成的包是一次載入的，沒有逐節點事件 → 依成品反推已完成節點，讓左側編排顯示綠燈而非全部待跑。
         const nd: string[] = []
         if (pkg.parsed_job) nd.push("parse")
@@ -150,7 +174,8 @@ export function PipelineView(
         if (pkg.cover_letter) nd.push("cover_letter")
         if (pkg.interview_kit) nd.push("interview_prep")
         if (pkg.tailored_resume || pkg.cover_letter || pkg.interview_kit) nd.push("join")
-        if (pkg.critique) nd.push("critic", "supervisor_critic", "human_gate")
+        if (pkg.critique) nd.push("critic")
+        if (pkg.tailored_resume || pkg.cover_letter || pkg.interview_kit) nd.push("human_gate")
         setDone(nd)
       }
     } catch { /* 忽略 */ }
@@ -159,21 +184,41 @@ export function PipelineView(
 
   // 產生投遞包（背景、射後不理）：POST /api/run → 記住 thread → 開始輪詢。
   // 完成後自動存進「我的投遞包」(待審)；離開頁面/重新整理都不中斷。
-  async function run(jdText: string, profile?: UserProfile | null) {
+  async function run(
+    jdText: string,
+    profile: UserProfile | null,
+    options: GenerationOptions,
+    searchMatch?: JobMatch | null,
+  ) {
     if (!jdText.trim()) return
     const effectiveProfile = profile ?? null
+    const normalized = normalizeGenerationOptions(options)
+    const payload = generationPayload(normalized)
     resetView(); setJd(jdText); setPhase("running"); setStatus("啟動中…")
+    setGenerationOptions(normalized)
+    setState(payload)
     try {
       const r = await fetch("/api/run", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jd_text: jdText, profile: effectiveProfile, preferences: preferences ?? null }),
+        body: JSON.stringify({
+          jd_text: jdText,
+          profile: effectiveProfile,
+          preferences: preferences ?? null,
+          ...payload,
+          ...searchAnalysisPayload(jdText, searchMatch),
+        }),
       })
       if (!r.ok) {
         const d = await r.json().catch(() => ({}))
         setError(d.error || "啟動失敗，請稍後再試。"); setPhase("idle"); return
       }
       const d = await r.json()
-      localStorage.setItem(RUN_KEY, JSON.stringify({ threadId: d.thread_id, packageId: d.package_id, jd: jdText }))
+      localStorage.setItem(RUN_KEY, JSON.stringify({
+        threadId: d.thread_id,
+        packageId: d.package_id,
+        jd: jdText,
+        options: normalized,
+      }))
       startPolling(d.thread_id, d.package_id)
     } catch {
       setError("連線發生問題，請確認伺服器是否啟動。"); setPhase("idle")
@@ -184,7 +229,11 @@ export function PipelineView(
   useEffect(() => {
     if (!seed?.jd) return
     const timer = window.setTimeout(() => {
-      resetView(); setPendingJd(seed.jd); setJd(""); setManualJd(""); setPhase("idle"); setStatus("")
+      resetView()
+      setPendingJd(seed.jd)
+      setPendingMatch(seed.match || null)
+      setGenerationOptions({ ...QUICK_GENERATION, artifactTargets: [...QUICK_GENERATION.artifactTargets] })
+      setJd(""); setManualJd(""); setPhase("idle"); setStatus("")
     }, 0)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -194,7 +243,8 @@ export function PipelineView(
   useEffect(() => {
     if (!watch?.threadId) return
     const timer = window.setTimeout(() => {
-      resetView(); setPendingJd(""); setJd(watch.title || "")
+      resetView(); setPendingJd(""); setPendingMatch(null); setJd(watch.title || "")
+      setGenerationOptions({ ...QUICK_GENERATION, artifactTargets: [...QUICK_GENERATION.artifactTargets] })
       localStorage.setItem(RUN_KEY, JSON.stringify(
         { threadId: watch.threadId, packageId: watch.packageId, jd: watch.title || "" }))
       startPolling(watch.threadId, watch.packageId)
@@ -213,6 +263,7 @@ export function PipelineView(
       if (s.threadId && s.packageId) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setJd(s.jd || "")
+        if (s.options) setGenerationOptions(normalizeGenerationOptions(s.options))
         startPolling(s.threadId, s.packageId)
       }
     } catch { /* 忽略毀損快取 */ }
@@ -230,7 +281,9 @@ export function PipelineView(
       case "resume": return state.tailored_resume ? <ResumeDoc r={state.tailored_resume} /> : null
       case "cover": return state.cover_letter ? <CoverLetterDoc c={state.cover_letter} /> : null
       case "interview": return state.interview_kit ? <InterviewKitDoc k={state.interview_kit} /> : null
-      case "critique": return state.critique ? <CritiqueCard q={state.critique} /> : null
+      case "critique": return state.critique
+        ? <CritiqueCard q={state.critique} targets={generationOptions.artifactTargets} />
+        : null
       default: return null
     }
   }
@@ -261,8 +314,15 @@ export function PipelineView(
 
   function confirmRun(useProfile: boolean) {
     const text = pendingJd.trim() ? pendingJd : manualJd
+    const searchMatch = pendingMatch
     setPendingJd("")
-    void run(text, useProfile ? confirmProfile?.profile ?? null : null)
+    setPendingMatch(null)
+    void run(
+      text,
+      useProfile ? confirmProfile?.profile ?? null : null,
+      generationOptions,
+      searchMatch,
+    )
   }
 
   return (
@@ -280,7 +340,7 @@ export function PipelineView(
             <p className="text-xs text-slate-400 mb-1">產出前確認</p>
             <h2 className="font-semibold text-lg text-slate-900 truncate" title={pendingTitle}>{pendingTitle}</h2>
             <p className="text-sm text-slate-500 mt-1">
-              產生前請確認要使用哪一位候選人的 Profile，避免把不同人的履歷套到同一份投遞包。
+              確認候選人 Profile，再選這次真正需要的文件；未勾選的環節不會呼叫 AI。
             </p>
           </div>
           <CandidateProfileManager
@@ -294,14 +354,19 @@ export function PipelineView(
             onDeleteProfile={onDeleteProfile}
             onClearActiveProfile={onClearActiveProfile}
           />
+          <GenerationOptionsPanel
+            value={generationOptions}
+            onChange={(next) => setGenerationOptions(normalizeGenerationOptions(next))}
+            reusesSearchAnalysis={Boolean(pendingMatch)}
+          />
           <div className="mt-5 flex flex-wrap gap-2">
             <Button icon={Sparkles} disabled={!confirmProfile} onClick={() => confirmRun(true)}>
-              使用此 Profile 生成
+              使用此 Profile 開始
             </Button>
             <Button variant="secondary" onClick={() => confirmRun(false)}>
-              不使用 Profile
+              使用示範 Profile
             </Button>
-            <Button variant="ghost" onClick={() => setPendingJd("")}>取消</Button>
+            <Button variant="ghost" onClick={() => { setPendingJd(""); setPendingMatch(null) }}>取消</Button>
           </div>
         </Card>
       ) : idleEmpty ? (
@@ -316,7 +381,14 @@ export function PipelineView(
             className="w-full border border-slate-300 rounded-lg p-3 text-sm h-32 focus:outline-none focus:ring-2 focus:ring-brand-200"
             placeholder="貼上職缺 JD 文字…" value={manualJd} onChange={(e) => setManualJd(e.target.value)} />
           <div className="mt-3">
-            <Button icon={Sparkles} disabled={!manualJd.trim()} onClick={() => setPendingJd(manualJd)}>
+            <Button icon={Sparkles} disabled={!manualJd.trim()} onClick={() => {
+              setPendingMatch(null)
+              setGenerationOptions({
+                ...QUICK_GENERATION,
+                artifactTargets: [...QUICK_GENERATION.artifactTargets],
+              })
+              setPendingJd(manualJd)
+            }}>
               確認生成設定
             </Button>
           </div>
@@ -325,7 +397,7 @@ export function PipelineView(
       ) : (
         <div className="grid lg:grid-cols-[300px_1fr] gap-6">
           <aside className="no-print">
-            <AgentTrace done={done} running={phase === "running"} revisions={revisions}
+            <AgentTrace done={done} running={phase === "running"} options={generationOptions}
               status={status} telemetry={telemetry} nodeErrors={nodeErrors} />
           </aside>
           <main className="space-y-4">
@@ -396,8 +468,8 @@ export function PipelineView(
               </Card>
             ) : phase === "running" ? (
               <Card className="p-2">
-                <EmptyState icon={Network} title="正在產生投遞包…"
-                  desc="左側可看多 agent 的即時編排，成品會逐步出現。離開或重新整理都不會中斷。" />
+                <EmptyState icon={Network} title="正在產生所選文件…"
+                  desc="左側只顯示這次會執行的步驟；離開或重新整理都不會中斷。" />
               </Card>
             ) : null}
           </main>

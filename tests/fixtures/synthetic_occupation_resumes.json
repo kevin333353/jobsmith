@@ -1,0 +1,282 @@
+[
+  {
+    "id": "administration",
+    "expected_role": "行政人員",
+    "expected_skill": "document management",
+    "job_title": "行政專員",
+    "resume": "行政專員\n具備文件管理、文書處理與跨部門協調經驗。"
+  },
+  {
+    "id": "executive_assistant",
+    "expected_role": "秘書",
+    "expected_skill": "scheduling",
+    "job_title": "Executive Assistant",
+    "resume": "Executive Assistant\n負責行程安排、會議協調與文件管理。"
+  },
+  {
+    "id": "international_trade",
+    "expected_role": "國際貿易",
+    "expected_skill": "import/export",
+    "job_title": "國貿專員",
+    "resume": "國貿專員\n處理進出口文件、報關與英文客戶往來。"
+  },
+  {
+    "id": "event_planning",
+    "expected_role": "活動企劃",
+    "expected_skill": "event planning",
+    "job_title": "活動企劃",
+    "resume": "活動企劃\n負責活動規劃、供應商協調與現場執行。"
+  },
+  {
+    "id": "public_relations",
+    "expected_role": "公關",
+    "expected_skill": "public relations",
+    "job_title": "公關專員",
+    "resume": "公關專員\n具備媒體關係、公關與記者會執行經驗。"
+  },
+  {
+    "id": "retail",
+    "expected_role": "零售門市",
+    "expected_skill": "POS",
+    "job_title": "門市人員",
+    "resume": "門市人員\n熟悉 POS 系統、商品陳列與顧客服務。"
+  },
+  {
+    "id": "store_manager",
+    "expected_role": "店長",
+    "expected_skill": "inventory management",
+    "job_title": "連鎖門市店長",
+    "resume": "店長\n管理排班、庫存管理與門市營運績效。"
+  },
+  {
+    "id": "food_service",
+    "expected_role": "餐飲服務",
+    "expected_skill": "food safety",
+    "job_title": "餐飲服務人員",
+    "resume": "餐飲服務人員\n熟悉外場服務、食品安全與顧客接待。"
+  },
+  {
+    "id": "chef",
+    "expected_role": "廚師",
+    "expected_skill": "cooking",
+    "job_title": "西餐廚師",
+    "resume": "西餐廚師\n具備西餐烹調、備料與食品衛生管理能力。"
+  },
+  {
+    "id": "barista",
+    "expected_role": "咖啡師",
+    "expected_skill": "coffee brewing",
+    "job_title": "咖啡師 Barista",
+    "resume": "咖啡師\n熟悉義式咖啡、手沖咖啡與門市服務。"
+  },
+  {
+    "id": "hospitality",
+    "expected_role": "旅宿服務",
+    "expected_skill": "front desk",
+    "job_title": "飯店櫃檯人員",
+    "resume": "飯店櫃檯人員\n負責櫃檯接待、訂房處理與旅宿服務。"
+  },
+  {
+    "id": "logistics",
+    "expected_role": "物流專員",
+    "expected_skill": "logistics management",
+    "job_title": "物流專員",
+    "resume": "物流專員\n具備物流管理、運輸調度與路線規劃經驗。"
+  },
+  {
+    "id": "warehouse",
+    "expected_role": "倉儲人員",
+    "expected_skill": "warehouse management",
+    "job_title": "倉管人員",
+    "resume": "倉管人員\n負責倉儲管理、理貨與庫存盤點。"
+  },
+  {
+    "id": "driver",
+    "expected_role": "司機",
+    "expected_skill": "route planning",
+    "job_title": "配送司機",
+    "resume": "配送司機\n熟悉路線規劃、貨物配送與車輛日常維護。"
+  },
+  {
+    "id": "production_operator",
+    "expected_role": "生產作業員",
+    "expected_skill": "quality control",
+    "job_title": "生產作業員",
+    "resume": "生產作業員\n依標準流程操作生產線並執行品質管理。"
+  },
+  {
+    "id": "production_planning",
+    "expected_role": "生產管理",
+    "expected_skill": "production planning",
+    "job_title": "生管專員",
+    "resume": "生管專員\n負責生產排程、產能規劃與物料進度追蹤。"
+  },
+  {
+    "id": "quality",
+    "expected_role": "品質管理",
+    "expected_skill": "ISO 9001",
+    "job_title": "品保工程師",
+    "resume": "品保工程師\n具備 ISO 9001、品質管理與異常改善經驗。"
+  },
+  {
+    "id": "mechanical",
+    "expected_role": "機械工程師",
+    "expected_skill": "SolidWorks",
+    "job_title": "機械設計工程師",
+    "resume": "機械設計工程師\n使用 SolidWorks 進行機構與零件設計。"
+  },
+  {
+    "id": "electrical",
+    "expected_role": "電機工程師",
+    "expected_skill": "PLC",
+    "job_title": "電控工程師",
+    "resume": "電控工程師\n熟悉 PLC、設備配線與自動控制。"
+  },
+  {
+    "id": "electronics",
+    "expected_role": "電子工程師",
+    "expected_skill": "PCB design",
+    "job_title": "硬體工程師",
+    "resume": "硬體工程師\n負責 PCB design、電路設計與硬體驗證。"
+  },
+  {
+    "id": "semiconductor",
+    "expected_role": "半導體工程師",
+    "expected_skill": "semiconductor process",
+    "job_title": "半導體製程工程師",
+    "resume": "半導體製程工程師\n具備晶圓製程、設備參數調整與良率改善經驗。"
+  },
+  {
+    "id": "maintenance",
+    "expected_role": "維修技術員",
+    "expected_skill": "equipment maintenance",
+    "job_title": "設備維修技術員",
+    "resume": "設備維修技術員\n負責設備維護、機台維修與預防保養。"
+  },
+  {
+    "id": "civil",
+    "expected_role": "土木工程師",
+    "expected_skill": "AutoCAD",
+    "job_title": "土木工程師",
+    "resume": "土木工程師\n使用 AutoCAD 製圖並執行工程估價。"
+  },
+  {
+    "id": "construction",
+    "expected_role": "工地管理",
+    "expected_skill": "construction management",
+    "job_title": "工地主任",
+    "resume": "工地主任\n負責工地管理、施工進度與職業安全衛生。"
+  },
+  {
+    "id": "real_estate",
+    "expected_role": "不動產業務",
+    "expected_skill": "CRM",
+    "job_title": "不動產經紀人",
+    "resume": "不動產經紀人\n使用 CRM 維繫客戶並提供租賃顧問服務。"
+  },
+  {
+    "id": "nursing",
+    "expected_role": "護理師",
+    "expected_skill": "patient care",
+    "job_title": "病房護理師",
+    "resume": "護理師\n具備病患照護、BLS 與藥物管理經驗。"
+  },
+  {
+    "id": "pharmacist",
+    "expected_role": "藥師",
+    "expected_skill": "pharmacy practice",
+    "job_title": "社區藥局藥師",
+    "resume": "藥師\n負責處方調劑、藥事服務與用藥諮詢。"
+  },
+  {
+    "id": "teacher",
+    "expected_role": "教師",
+    "expected_skill": "lesson planning",
+    "job_title": "國中教師",
+    "resume": "國中教師\n具備教案設計、班級經營與教材設計能力。"
+  },
+  {
+    "id": "legal",
+    "expected_role": "法務",
+    "expected_skill": "contract review",
+    "job_title": "企業法務專員",
+    "resume": "企業法務專員\n負責合約審閱、法律研究與法令遵循。"
+  },
+  {
+    "id": "research",
+    "expected_role": "研究員",
+    "expected_skill": "research methods",
+    "job_title": "研究助理",
+    "resume": "研究助理\n熟悉研究方法、統計分析與 SPSS。"
+  },
+  {
+    "id": "editor",
+    "expected_role": "編輯",
+    "expected_skill": "copywriting",
+    "job_title": "內容編輯",
+    "resume": "內容編輯\n負責文案撰寫、文字編輯與內容企劃。"
+  },
+  {
+    "id": "video",
+    "expected_role": "影音製作",
+    "expected_skill": "video editing",
+    "job_title": "影音剪輯師",
+    "resume": "影音剪輯師\n熟悉影片剪輯、Adobe Premiere 與攝影。"
+  },
+  {
+    "id": "translation",
+    "expected_role": "翻譯",
+    "expected_skill": "translation",
+    "job_title": "日文翻譯",
+    "resume": "日文翻譯\n具備日文筆譯、口譯與商務文件翻譯經驗。"
+  },
+  {
+    "id": "social_work",
+    "expected_role": "社會工作",
+    "expected_skill": "case management",
+    "job_title": "社工師",
+    "resume": "社工師\n負責個案管理、家庭訪視與資源連結。"
+  },
+  {
+    "id": "banking",
+    "expected_role": "銀行專員",
+    "expected_skill": "wealth management",
+    "job_title": "銀行理財專員",
+    "resume": "銀行理財專員\n具備財富管理、理財規劃與客戶關係管理經驗。"
+  },
+  {
+    "id": "insurance",
+    "expected_role": "保險顧問",
+    "expected_skill": "insurance planning",
+    "job_title": "保險顧問",
+    "resume": "保險顧問\n提供保險規劃、保單規劃與客戶服務。"
+  },
+  {
+    "id": "audit",
+    "expected_role": "稅務審計",
+    "expected_skill": "auditing",
+    "job_title": "審計專員",
+    "resume": "審計專員\n具備審計、稅務與 Excel 分析能力。"
+  },
+  {
+    "id": "security",
+    "expected_role": "保全人員",
+    "expected_skill": "security operations",
+    "job_title": "保全人員",
+    "resume": "保全人員\n執行安全勤務、門禁管理與巡邏。"
+  },
+  {
+    "id": "cleaning",
+    "expected_role": "清潔人員",
+    "expected_skill": "cleaning operations",
+    "job_title": "環境清潔人員",
+    "resume": "環境清潔人員\n負責環境清潔、清潔維護與物料補充。"
+  },
+  {
+    "id": "beauty",
+    "expected_role": "美容美髮",
+    "expected_skill": "hair styling",
+    "job_title": "美髮設計師",
+    "resume": "美髮設計師\n具備髮型設計、美髮與顧客諮詢經驗。"
+  }
+]

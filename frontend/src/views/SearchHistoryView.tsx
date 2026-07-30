@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react"
 import type { MouseEvent } from "react"
-import type { UserProfile, JobMatch } from "../types"
+import type { UserProfile, JobMatch, SkillGapReport } from "../types"
 import { resolveJd } from "../lib/resolveJd"
+import { normalizeJobSearchMode, type JobSearchMode } from "../lib/localDiscovery"
+import { DiscoveryInsights } from "../components/jobs/DiscoveryInsights"
 import { JobList } from "../components/jobs/JobList"
 import { ResultRefinementBar } from "../components/jobs/ResultRefinementBar"
 import {
@@ -14,11 +16,15 @@ import { EmptyState } from "../ui/EmptyState"
 import { Search, Trash2, ArrowLeft, Building2 } from "../ui/icons"
 
 interface SearchSummary {
-  id: number; created_at: string; label: string; ai_count: number; company_count: number
+  id: number; created_at: string; label: string; ai_count: number; company_count: number;
+  search_mode?: JobSearchMode;
 }
 interface SearchDetail {
   id: number; label: string; created_at: string; profile?: UserProfile | null;
-  payload: { jobs?: JobMatch[]; companyJobs?: JobMatch[] }
+  payload: {
+    jobs?: JobMatch[]; companyJobs?: JobMatch[];
+    searchMode?: JobSearchMode; skillGap?: SkillGapReport;
+  }
 }
 
 function fmtDate(iso: string) {
@@ -28,7 +34,10 @@ function fmtDate(iso: string) {
 
 export function SearchHistoryView(
   { active, onPick }:
-  { active: boolean; onPick: (jd: string, profile?: UserProfile | null) => void },
+  {
+    active: boolean
+    onPick: (jd: string, profile?: UserProfile | null, match?: JobMatch | null) => void
+  },
 ) {
   const [list, setList] = useState<SearchSummary[]>([])
   const [detail, setDetail] = useState<SearchDetail | null>(null)
@@ -59,17 +68,18 @@ export function SearchHistoryView(
     refresh()
   }
 
-  // ---- 詳情：顯示當時的 AI 推薦 + 指定公司 + 技能缺口 ----
+  // ---- 詳情：顯示當時的履歷配對 + 指定公司 + 技能缺口 ----
   if (detail) {
     const p = detail.payload || {}
     const profile: UserProfile | null = detail.profile || null
     const aiJobs: JobMatch[] = p.jobs || []
     const companyJobs: JobMatch[] = p.companyJobs || []
+    const searchMode: JobSearchMode = p.searchMode ? normalizeJobSearchMode(p.searchMode) : "ai"
     const allJobs = [...aiJobs, ...companyJobs]
     const visibleAiJobs = filterJobMatches(aiJobs, resultRefinement)
     const visibleCompanyJobs = filterJobMatches(companyJobs, resultRefinement)
     const visibleCount = visibleAiJobs.length + visibleCompanyJobs.length
-    const pick = async (m: JobMatch) => onPick(await resolveJd(m.job), profile)
+    const pick = async (m: JobMatch) => onPick(await resolveJd(m.job), profile, m)
     return (
       <div>
         <button onClick={() => setDetail(null)}
@@ -78,6 +88,8 @@ export function SearchHistoryView(
         </button>
         <h2 className="font-semibold mb-1">{detail.label}</h2>
         <p className="text-sm text-slate-500 mb-4">{fmtDate(detail.created_at)}</p>
+
+        <DiscoveryInsights profile={profile} skillGap={p.skillGap} mode={searchMode} />
 
         {allJobs.length > 0 && (
           <ResultRefinementBar
@@ -92,7 +104,10 @@ export function SearchHistoryView(
 
         {aiJobs.length > 0 && (
           <>
-            <h3 className="font-semibold mb-3">AI 推薦職缺（{visibleAiJobs.length} / {aiJobs.length}）</h3>
+            <h3 className="font-semibold mb-3">
+              {searchMode === "local" ? "免 AI 履歷配對職缺" : "AI 推薦職缺"}
+              （{visibleAiJobs.length} / {aiJobs.length}）
+            </h3>
             {visibleAiJobs.length > 0
               ? <JobList matches={visibleAiJobs} onPick={pick} />
               : <p className="text-sm text-slate-400">目前結果篩選沒有符合的職缺，放寬條件看看。</p>}
@@ -133,7 +148,10 @@ export function SearchHistoryView(
           <div className="flex-1 min-w-0">
             <p className="font-medium text-slate-900 truncate">{s.label}</p>
             <p className="text-sm text-slate-600 truncate">
-              AI {s.ai_count} 筆{s.company_count ? `・指定公司 ${s.company_count} 筆` : ""} · {fmtDate(s.created_at)}
+              {(s.search_mode ? normalizeJobSearchMode(s.search_mode) : "ai") === "local"
+                ? "免 AI 配對"
+                : "AI 推薦"} {s.ai_count} 筆
+              {s.company_count ? `・指定公司 ${s.company_count} 筆` : ""} · {fmtDate(s.created_at)}
             </p>
           </div>
           <button onClick={(e) => del(s.id, e)} aria-label={`刪除 ${s.label}`} title="刪除"

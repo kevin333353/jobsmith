@@ -72,10 +72,10 @@ export function BackendSelector({ refreshKey = 0 }: { refreshKey?: number }) {
   }
 
   return (
-    <div className="relative no-print">
+    <div className="relative shrink-0 no-print">
       <button type="button" onClick={toggle} aria-expanded={open}
         title="切換 AI 後端：本機 CLI、本機模型或自備 Key（OpenAI 相容）。"
-        className={`inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white pl-3 pr-2 py-1.5 text-xs text-slate-700 shadow-card hover:bg-slate-50 ${be.busy ? "opacity-60" : ""}`}>
+        className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-slate-300 bg-white pl-3 pr-2 py-1.5 text-xs text-slate-700 shadow-card hover:bg-slate-50 ${be.busy ? "opacity-60" : ""}`}>
         <Cpu className="w-4 h-4 text-brand-500" />
         <span className="font-medium text-slate-800">{pill}</span>
         <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition ${open ? "rotate-180" : ""}`} />

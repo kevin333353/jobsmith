@@ -1,6 +1,7 @@
 import type { ComponentType, ReactNode } from "react"
 import type {
   MatchReport, CompanyBrief, TailoredResume, CoverLetter, InterviewKit, CritiqueReport,
+  PackageArtifact,
 } from "../../types"
 import { ScoreRing } from "../ScoreRing"
 import { Card } from "../../ui/Card"
@@ -192,21 +193,28 @@ export function InterviewKitDoc({ k }: { k: InterviewKit }) {
   )
 }
 
-export function CritiqueCard({ q }: { q: CritiqueReport }) {
-  const rows: [string, number][] = [
-    ["履歷", q.resume_score], ["求職信", q.cover_letter_score], ["面試", q.interview_score],
-  ]
+export function CritiqueCard(
+  { q, targets = ["resume", "cover_letter", "interview"] }:
+  { q: CritiqueReport; targets?: PackageArtifact[] },
+) {
+  const rows = [
+    ["resume", "履歷", q.resume_score],
+    ["cover_letter", "求職信", q.cover_letter_score],
+    ["interview", "面試", q.interview_score],
+  ].filter(([key]) => targets.includes(key as PackageArtifact)) as [PackageArtifact, string, number][]
   const tone = (s: number) => (s >= 80 ? "text-emerald-600" : s >= 60 ? "text-amber-500" : "text-rose-600")
   return (
-    <Section icon={ShieldCheck} title="品管評審">
+    <Section icon={ShieldCheck} title="AI 品管建議">
       <p className="text-sm mb-3 flex items-center gap-1.5">
         {q.overall_pass
           ? <><CheckCircle2 className="w-4 h-4 text-emerald-600" />整體達標</>
-          : <><AlertTriangle className="w-4 h-4 text-amber-500" />未達標（已觸發重寫）</>}
+          : <><AlertTriangle className="w-4 h-4 text-amber-500" />有可改善項目（不會自動重寫）</>}
       </p>
-      <div className="grid grid-cols-3 gap-3">
-        {rows.map(([label, score]) => (
-          <div key={label} className="text-center rounded-lg bg-slate-50 py-3">
+      <div className={`grid gap-3 ${
+        rows.length === 1 ? "grid-cols-1" : rows.length === 2 ? "grid-cols-2" : "grid-cols-3"
+      }`}>
+        {rows.map(([key, label, score]) => (
+          <div key={key} className="text-center rounded-lg bg-slate-50 py-3">
             <div className={`text-2xl font-bold ${tone(score)}`}>{score}</div>
             <div className="text-xs text-slate-500 mt-0.5">{label}</div>
           </div>

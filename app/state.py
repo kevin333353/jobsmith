@@ -18,6 +18,11 @@ from app.models import (
 class CopilotState(TypedDict):
     jd_text: str
     profile: Profile
+    # 本次實際要產出的文件；舊 checkpoint 未帶此欄位時 graph 會相容為全部產出。
+    artifact_targets: list[str]
+    # 公司情報與 AI 品管都是選配，避免每次都支付固定的額外呼叫成本。
+    company_research_requested: bool
+    quality_review: bool
     parsed_job: ParsedJob | None
     match_report: MatchReport | None
     supervisor_decision: SupervisorDecision | None

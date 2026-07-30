@@ -1,7 +1,7 @@
-"""搜尋紀錄：把每次職缺搜尋結果（AI 推薦＋指定公司＋技能缺口）存起來，可回看/重開/刪除。
+"""搜尋紀錄：把每次職缺配對結果（免 AI / AI＋指定公司＋技能缺口）存起來，可回看/重開/刪除。
 
 與「投遞包歷史」(history.py) 分開：這裡存的是『搜尋結果整包』，方便依履歷管理、
-不會因為 LLM 評分每次不同或即時來源變動而「重找就不見」。
+不會因為評分模式或即時來源變動而「重找就不見」。
 """
 from __future__ import annotations
 
@@ -31,9 +31,18 @@ def list_searches() -> list[dict]:
     conn = db.get_conn()
     with db.LOCK:
         rows = conn.execute(
-            "SELECT id,created_at,label,ai_count,company_count "
+            "SELECT id,created_at,label,ai_count,company_count,payload_json "
             "FROM searches ORDER BY id DESC").fetchall()
-    return [dict(r) for r in rows]
+    out: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            payload = json.loads(item.pop("payload_json") or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        item["search_mode"] = "local" if payload.get("searchMode") == "local" else "ai"
+        out.append(item)
+    return out
 
 
 def get_search(sid: int) -> dict | None:

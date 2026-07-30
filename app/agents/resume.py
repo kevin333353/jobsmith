@@ -1,4 +1,5 @@
 """③ 履歷客製 Agent：針對單一職缺改寫履歷。"""
+from app.agents.prompt_context import profile_prompt_json
 from app.llm import get_llm
 from app.models import ParsedJob, Profile, TailoredResume
 
@@ -17,7 +18,7 @@ def tailor_resume(job: ParsedJob, profile: Profile, feedback: list[str] | None =
         "【職缺】\n"
         f"{job.model_dump_json(indent=2)}\n\n"
         "【求職者背景】\n"
-        f"{profile.model_dump_json(indent=2)}"
+        f"{profile_prompt_json(profile, job=job, include_relevant_raw=True)}"
     )
     if feedback:
         human += "\n\n【品管意見，請據此改進】\n" + "\n".join(f"- {f}" for f in feedback)

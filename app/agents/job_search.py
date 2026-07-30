@@ -1,7 +1,7 @@
 """職缺探索 agent：從履歷推導搜尋關鍵字、對搜到的職缺依履歷排序。"""
 from pydantic import BaseModel, Field, field_validator
 
-from app.agents.skill_lexicon import extract_skills
+from app.agents.local_discovery import derive_local_queries, rank_jobs_locally
 from app.llm import get_llm
 from app.models import JobMatch, JobPosting, Profile, coerce_str, coerce_str_list
 
@@ -68,24 +68,8 @@ def _profile_brief(profile: Profile) -> str:
 
 
 def _fallback_queries(profile: Profile) -> list[str]:
-    """LLM 結構化輸出失敗時的本機查詢詞備援。"""
-    candidates: list[str] = []
-    candidates.extend(str(r).strip() for r in (profile.preferred_roles or []) if str(r).strip())
-    skills = [str(s).strip() for s in (profile.skills or []) if str(s).strip()]
-    skill_blob = " ".join(skills).lower()
-    summary = (profile.summary or "").lower()
-    if any(k in skill_blob for k in ("llm", "rag", "langchain", "langgraph", "openai")):
-        candidates.append("AI 工程師")
-    if "python" in skill_blob:
-        candidates.append("Python 後端")
-    if any(k in summary for k in ("data", "資料", "數據")):
-        candidates.append("資料工程師")
-    candidates.extend(skills[:3])
-    out = []
-    for c in candidates:
-        if c and c not in out:
-            out.append(c)
-    return out[:3] or ["工程師"]
+    """LLM 結構化輸出失敗時，使用正式的本機查詢推導器。"""
+    return derive_local_queries(profile)
 
 
 def derive_queries(profile: Profile) -> list[str]:
@@ -104,46 +88,9 @@ def derive_queries(profile: Profile) -> list[str]:
 _RANK_INPUT_MAX = 50  # 送 LLM 排序的職缺上限（控 prompt 大小/成本）；超出者不送排序
 
 
-def _job_blob(j: JobPosting) -> str:
-    return " ".join([
-        j.title or "", j.company or "", j.location or "", j.snippet or "",
-        " ".join(str(r) for r in (j.requirements or [])), j.raw_text or "",
-    ]).lower()
-
-
-def _profile_blob(profile: Profile) -> str:
-    return " ".join([
-        profile.summary or "", " ".join(profile.skills or ""),
-        " ".join(profile.experiences or ""), " ".join(profile.preferred_roles or ""),
-    ])
-
-
 def _fallback_rank_jobs(profile: Profile, jobs: list[JobPosting], top_k: int | None = None) -> list[JobMatch]:
-    """LLM 排序失敗時仍給使用者可用列表：以技能/職稱關鍵字重疊估分。"""
-    have_skills = set(extract_skills(_profile_blob(profile)))
-    raw_skills = [str(s).strip() for s in (profile.skills or []) if str(s).strip()]
-    roles = [str(r).strip().lower() for r in (profile.preferred_roles or []) if str(r).strip()]
-    matches: list[JobMatch] = []
-    for job in jobs:
-        blob = _job_blob(job)
-        job_skills = set(extract_skills(blob))
-        skill_hits = sorted(have_skills & job_skills)
-        raw_hits = [s for s in raw_skills if s.lower() in blob and s not in skill_hits]
-        role_hits = [r for r in roles if r and r in blob]
-        score = 35 + min(40, 12 * len(skill_hits) + 8 * len(raw_hits)) + min(15, 15 * len(role_hits))
-        if not skill_hits and not raw_hits and not role_hits:
-            score = 30
-        gaps = sorted(job_skills - have_skills)[:6]
-        reason = "AI 排序暫時不可用，已改用本機技能與職稱關鍵字比對。"
-        matches.append(JobMatch(
-            job=job,
-            fit_score=min(90, score),
-            matched=[*skill_hits, *raw_hits, *role_hits],
-            gaps=gaps,
-            reason=reason,
-        ))
-    matches.sort(key=lambda m: (-m.fit_score, m.job.url or (m.job.title + m.job.company)))
-    return matches if top_k is None else matches[:top_k]
+    """LLM 排序失敗時，使用同一套正式、可解釋的本機評分器。"""
+    return rank_jobs_locally(profile, jobs, top_k)
 
 
 def fallback_rank_jobs(profile: Profile, jobs: list[JobPosting], top_k: int | None = None) -> list[JobMatch]:
@@ -180,11 +127,16 @@ def rank_jobs(profile: Profile, jobs: list[JobPosting], top_k: int | None = None
         r = by_idx.get(i)
         if r is not None:
             matches.append(JobMatch(job=job, fit_score=r.fit_score,
-                                    matched=r.matched, gaps=r.gaps, reason=r.reason))
+                                    matched=r.matched, gaps=r.gaps, reason=r.reason,
+                                    ranking_mode="ai"))
         else:
-            matches.append(JobMatch(job=job, fit_score=0, reason="未評分"))
+            matches.append(JobMatch(job=job, fit_score=0, reason="未評分",
+                                    ranking_mode="ai"))
     # 穩定排序：同分時以 url 決定先後，讓同一批職缺的顯示順序可重現（不隨並行/批次到達順序變動）。
     matches.sort(key=lambda m: (-m.fit_score, m.job.url or (m.job.title + m.job.company)))
     # 超出排序上限的職缺仍保留（附在後面、未評分），確保「不設限」顯示全部
-    matches.extend(JobMatch(job=j, fit_score=0, reason="未評分") for j in overflow)
+    matches.extend(
+        JobMatch(job=j, fit_score=0, reason="未評分", ranking_mode="ai")
+        for j in overflow
+    )
     return matches if top_k is None else matches[:top_k]

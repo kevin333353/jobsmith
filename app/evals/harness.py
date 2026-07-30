@@ -1,10 +1,8 @@
-"""Eval harness：量測『反思迴圈關 vs 開』對投遞包品質的提升（用數字證明反思有效）。
+"""Eval harness：量測漸進式投遞包的一次性 AI 品管結果。
 
-- run_case：對單一 golden 案例跑整張 graph（真 LLM），回傳最終 CritiqueReport。
-  反思「關」= 把 MAX_REVISIONS 設 0（critic 一過就送核可，不重寫）；
-  反思「開」= 預設 MAX_REVISIONS（supervisor 決定是否重寫未過文件）。
-- summarize：純函式，彙整 pass-rate 與平均分提升（可單元測試，不需真 LLM）。
-- main：跑全部案例、印出比較、寫 JSON，數字可放進 README。
+- run_case：對單一 golden 案例產出完整文件並跑一次品管（不自動重寫）。
+- summarize：保留舊結果檔的 off/on 比較彙整（純函式）。
+- main：跑全部案例一次、印出通過率與平均分、寫 JSON。
 
 執行：python -m app.evals.harness   （需 claude_cli 或 anthropic 後端、會真的呼叫 LLM）
 """
@@ -18,25 +16,23 @@ from app import graph as graph_mod
 from app.evals.fixtures import GOLDEN
 
 
-def run_case(case: dict, max_revisions: int) -> object | None:
-    """跑單一案例到人工核可關卡，回傳最終 CritiqueReport（被 match 擋下則 None）。"""
+def run_case(case: dict) -> object | None:
+    """跑單一案例的一次性完整產出與品管；被 match 擋下則回 None。"""
     from langgraph.checkpoint.memory import MemorySaver
-    old = graph_mod.MAX_REVISIONS
-    graph_mod.MAX_REVISIONS = max_revisions
-    try:
-        g = graph_mod.build_graph(checkpointer=MemorySaver())
-        cfg = {"configurable": {"thread_id": uuid.uuid4().hex}}
-        initial = {
-            "jd_text": case["jd_text"], "profile": case["profile"],
-            "parsed_job": None, "match_report": None, "supervisor_decision": None,
-            "company_brief": None, "tailored_resume": None, "cover_letter": None,
-            "interview_kit": None, "critique": None, "revision_count": 0,
-            "approved": None, "errors": [], "telemetry": [],
-        }
-        g.invoke(initial, cfg)
-        return g.get_state(cfg).values.get("critique")
-    finally:
-        graph_mod.MAX_REVISIONS = old
+
+    g = graph_mod.build_graph(checkpointer=MemorySaver())
+    cfg = {"configurable": {"thread_id": uuid.uuid4().hex}}
+    initial = {
+        "jd_text": case["jd_text"], "profile": case["profile"],
+        "artifact_targets": ["resume", "cover_letter", "interview"],
+        "company_research_requested": True, "quality_review": True,
+        "parsed_job": None, "match_report": None, "supervisor_decision": None,
+        "company_brief": None, "tailored_resume": None, "cover_letter": None,
+        "interview_kit": None, "critique": None, "revision_count": 0,
+        "approved": None, "batch": True, "errors": [], "telemetry": [],
+    }
+    g.invoke(initial, cfg)
+    return g.get_state(cfg).values.get("critique")
 
 
 def _overall(report) -> float:
@@ -68,22 +64,28 @@ def summarize(rows: list[dict]) -> dict:
 def main() -> None:
     rows = []
     for case in GOLDEN:
-        print(f"[eval] {case['name']} — 反思關…")
-        off = run_case(case, max_revisions=0)
-        print(f"[eval] {case['name']} — 反思開…")
-        on = run_case(case, max_revisions=3)
-        rows.append({"name": case["name"], "off": off, "on": on})
+        print(f"[eval] {case['name']} — 一次性完整產出＋品管…")
+        report = run_case(case)
+        rows.append({"name": case["name"], "report": report})
 
-    summary = summarize(rows)
-    print("\n=== 反思迴圈評測結果 ===")
+    reports = [row["report"] for row in rows if row["report"]]
+    summary = {
+        "n": len(rows),
+        "reviewed": len(reports),
+        "pass_rate": round(100 * sum(1 for report in reports if report.overall_pass)
+                           / len(reports), 1) if reports else 0.0,
+        "mean_score": round(sum(_overall(report) for report in reports)
+                            / len(reports), 1) if reports else 0.0,
+    }
+    print("\n=== 漸進式投遞包評測結果 ===")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
     out = Path(__file__).parent / "results.json"
     out.write_text(json.dumps({
         "summary": summary,
-        "rows": [{"name": r["name"],
-                  "off": r["off"].model_dump() if r["off"] else None,
-                  "on": r["on"].model_dump() if r["on"] else None} for r in rows],
+        "rows": [{"name": row["name"],
+                  "report": row["report"].model_dump() if row["report"] else None}
+                 for row in rows],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n已寫入 {out}")
 

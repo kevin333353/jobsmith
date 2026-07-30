@@ -38,6 +38,20 @@ def test_fallback_profile_uses_title_role_for_non_software():
     assert p.parse_degraded is True  # 本機備援要標記降級，供前端提示檢查 AI 後端
 
 
+def test_first_class_local_profile_is_not_marked_as_degraded_and_reads_years():
+    resume = (
+        "王小明\n產品經理 / Product Manager\n"
+        "工作經驗：4 年\n負責 roadmap、使用者研究與需求分析。"
+    )
+
+    p = mod.structure_profile_local(resume)
+
+    assert p.preferred_roles == ["產品經理"]
+    assert p.years_experience == 4
+    assert p.parse_degraded is False
+    assert "user research" in p.skills
+
+
 def test_fallback_profile_keeps_software_role_rules():
     resume = "陳小安\nPython / FastAPI 後端工程師，三年 LLM/RAG 經驗。"
     p = mod._fallback_profile_from_text(resume)

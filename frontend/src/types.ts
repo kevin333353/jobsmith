@@ -48,10 +48,19 @@ export interface CritiqueReport {
   resume_score: number; cover_letter_score: number; interview_score: number;
   overall_pass: boolean; feedback: string[];
 }
+export type PackageArtifact = "resume" | "cover_letter" | "interview"
+export interface GenerationOptions {
+  artifactTargets: PackageArtifact[];
+  companyResearch: boolean;
+  qualityReview: boolean;
+}
 export interface PipelineState {
   parsed_job?: ParsedJob; match_report?: MatchReport; company_brief?: CompanyBrief;
   tailored_resume?: TailoredResume; cover_letter?: CoverLetter; interview_kit?: InterviewKit;
   critique?: CritiqueReport; approved?: boolean | null; revision_count?: number;
+  artifact_targets?: PackageArtifact[];
+  company_research_requested?: boolean;
+  quality_review?: boolean;
 }
 
 // ---- 職缺探索（對應 app/models.py 的 JobPosting / JobMatch）----
@@ -64,6 +73,9 @@ export interface JobPosting {
 }
 export interface JobMatch {
   job: JobPosting; fit_score: number; matched: string[]; gaps: string[]; reason: string;
+  ranking_mode?: "local" | "ai" | null;
+  evidence_level?: "high" | "medium" | "low" | null;
+  score_breakdown?: Record<string, number>;
 }
 // 使用者真實履歷結構（後端 /api/jobs/auto 與 /api/resume/evaluate 的 profile 事件，已排除 raw_text）
 export type UserProfile = Record<string, unknown>
@@ -86,8 +98,10 @@ export interface EditableProfile {
   preferred_roles: string;
 }
 
-// 從職缺列表「產生投遞包」時，帶 JD + 使用者真實履歷進 pipeline（profile 缺省則後端用 demo）
-export interface Seed { jd: string; profile?: UserProfile | null; nonce: number }
+// 從職缺列表「產生投遞包」時，帶 JD、履歷及既有 AI 配對結果進 pipeline。
+export interface Seed {
+  jd: string; profile?: UserProfile | null; match?: JobMatch | null; nonce: number;
+}
 
 // 逐節點 agent telemetry（後端 telemetry SSE 事件）
 export interface TelemetryEntry {
@@ -125,8 +139,9 @@ export type JobsAutoEvent =
   | { type: "queries"; queries: string[] }
   | { type: "source"; source: string; count: number; blocked: boolean }
   | { type: "all_blocked"; message: string }
-  | { type: "rank_start"; total: number; fallback: boolean }
+  | { type: "rank_start"; total: number; fallback: boolean; mode?: "local" | "ai" }
   | { type: "ranked_batch"; data: JobMatch[] }
+  | { type: "skill_gap"; data: SkillGapReport }
   | { type: "company_jobs"; data: JobMatch[] }
   | { type: "linkedin"; url: string }
   | { type: "stopped"; message: string }
@@ -136,6 +151,7 @@ export type JobsAutoEvent =
 // /api/run 與 /api/resume：投遞包多 agent pipeline
 export type PipelineEvent =
   | { type: "start"; thread_id: string }
+  | { type: "config"; data: Partial<PipelineState> }
   | { type: "node"; node: string; data?: Partial<PipelineState> }
   | { type: "node_error"; node: string; message: string }
   | { type: "profile_warning"; message: string }

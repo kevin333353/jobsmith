@@ -12,7 +12,6 @@ from app.models import (
     InterviewKit,
     MatchReport,
     ParsedJob,
-    SupervisorDecision,
     TailoredResume,
 )
 
@@ -22,11 +21,6 @@ def _patch_agents(monkeypatch):
                         lambda jd: ParsedJob(title="AI 工程師", company="未來智能"))
     monkeypatch.setattr(graph_mod, "match_profile",
                         lambda job, profile: MatchReport(score=82, recommend_proceed=True, reason="吻合"))
-    monkeypatch.setattr(graph_mod, "supervise_after_match",
-                        lambda match, job, profile: SupervisorDecision(next_action="proceed"))
-    monkeypatch.setattr(graph_mod, "supervise_after_critic",
-                        lambda critique, rc, mx: SupervisorDecision(
-                            next_action="approve" if (critique.overall_pass or rc >= mx) else "revise"))
     monkeypatch.setattr(graph_mod, "research_company", lambda name: CompanyBrief(company=name))
     monkeypatch.setattr(graph_mod, "tailor_resume",
                         lambda job, profile, feedback=None: TailoredResume(summary="履歷"))
@@ -42,6 +36,8 @@ def _patch_agents(monkeypatch):
 def _initial(profile):
     return {
         "jd_text": "JD", "profile": profile,
+        "artifact_targets": ["resume", "cover_letter", "interview"],
+        "company_research_requested": True, "quality_review": True,
         "parsed_job": None, "match_report": None, "company_brief": None,
         "tailored_resume": None, "cover_letter": None, "interview_kit": None,
         "critique": None, "revision_count": 0, "approved": None,

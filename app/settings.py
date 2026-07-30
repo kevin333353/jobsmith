@@ -15,7 +15,7 @@ load_dotenv()  # 從 .env 載入 ANTHROPIC_API_KEY、LLM_BACKEND、OPENAI_* 等
 MODEL_TIERS: dict[str, str] = {
     "cheap": "claude-haiku-4-5-20251001",   # 單純抽取（解析）
     "standard": "claude-sonnet-4-6",        # 匹配/生成主力
-    "deep": "claude-opus-4-8",              # Critic/Supervisor 硬判斷
+    "deep": "claude-opus-4-8",              # 選配 AI 品管等深度判斷
 }
 
 

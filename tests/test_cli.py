@@ -7,7 +7,6 @@ from app.models import (
     InterviewKit,
     MatchReport,
     ParsedJob,
-    SupervisorDecision,
     TailoredResume,
 )
 
@@ -70,16 +69,6 @@ def _patch_graph_agents(monkeypatch):
     monkeypatch.setattr(graph_mod, "critique_package",
                         lambda job, r, c, k: CritiqueReport(resume_score=90, cover_letter_score=90,
                                                             interview_score=90, overall_pass=True))
-    # 新增的 supervisor 節點也要 mock，否則 cli.run 會打真 LLM（測試變慢/不穩）
-    monkeypatch.setattr(graph_mod, "supervise_after_match",
-                        lambda match, job, profile: SupervisorDecision(
-                            next_action="proceed" if (match.recommend_proceed and match.score >= 60)
-                            else "stop"))
-    monkeypatch.setattr(graph_mod, "supervise_after_critic",
-                        lambda critique, rc, mx: SupervisorDecision(
-                            next_action="approve" if (critique.overall_pass or rc >= mx) else "revise"))
-
-
 def test_run_handles_interrupt_and_resume(monkeypatch, tmp_path):
     jd_file = tmp_path / "jd.txt"
     jd_file.write_text("一些 JD", encoding="utf-8")

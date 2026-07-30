@@ -28,7 +28,8 @@ def test_derive_queries_fallback_to_preferred_role(monkeypatch):
     canned = mod.SearchQueries(queries=[])
     monkeypatch.setattr(mod, "get_llm", lambda tier, **k: FakeLLM(canned))
     qs = mod.derive_queries(Profile(name="王", summary="x", preferred_roles=["資料工程師"], raw_text="r"))
-    assert qs == ["資料工程師"]
+    assert qs[0] == "資料工程師"
+    assert "Data Engineer" in qs
 
 
 def test_derive_queries_fallback_when_llm_returns_non_json(monkeypatch):
@@ -41,7 +42,8 @@ def test_derive_queries_fallback_when_llm_returns_non_json(monkeypatch):
 
     monkeypatch.setattr(mod, "get_llm", lambda tier, **k: BrokenLLM())
     qs = mod.derive_queries(Profile(name="王", summary="後端", skills=["Python", "FastAPI"], raw_text="r"))
-    assert qs[0] == "Python 後端"
+    assert qs[0] == "後端工程師"
+    assert any("Python" in query for query in qs)
 
 
 def test_rank_jobs_sorts_desc_and_maps(monkeypatch):

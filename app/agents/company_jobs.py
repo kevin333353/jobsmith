@@ -32,6 +32,7 @@ def find_company_jobs(
     profile=None,
     work_modes: list[str] | None = None,
     include_inferred: bool = False,
+    include_research: bool = True,
 ) -> list[JobPosting]:
     seen: set[str] = set()
     out: list[JobPosting] = []
@@ -54,7 +55,9 @@ def find_company_jobs(
     except Exception:
         pass
 
-    # ② WebSearch 官網 careers（僅 claude_cli 後端；其他回 None）
+    # ② WebSearch 官網 careers（僅 AI 模式；免 AI 模式明確略過）
+    if not include_research:
+        return out
     try:
         result = research_structured(
             JobPostingList,

@@ -12,7 +12,7 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
 
 **If this helps your job search or AI-agent workflow, please consider giving Jobsmith a star.**
 
-[繁體中文](README.md) · [**Download (Windows / unsigned macOS)**](#download) · [Quick Start](#quick-start-from-source) · [Architecture](#architecture) · [Privacy](docs/PRIVACY.md)
+[繁體中文](README.md) · [**Mobile Web (no AI, no install)**](https://jobsmith-web.onrender.com) · [**Download desktop (Windows / unsigned macOS)**](#download) · [Quick Start](#quick-start-from-source) · [Architecture](#architecture) · [Privacy](docs/PRIVACY.md)
 
 ![License](https://img.shields.io/badge/License-Apache_2.0-green)
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
@@ -25,12 +25,32 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
 </div>
 
 > The app UI is in Traditional Chinese, tailored to Taiwan's job-search conventions (104 / Cake / Yourator / LinkedIn). Data is stored locally by default; when you run AI features, your résumé and prompts are handled by the CLI, local model, or BYOK backend you choose. See [Privacy and Data Handling](docs/PRIVACY.md).
+>
+> An accountless **public Web preview mode** is also available for mobile testing. It forces no-AI matching, stores no server-side resume/search history, and exposes only resume-to-job search plus in-browser filtering. [Open Jobsmith Web](https://jobsmith-web.onrender.com), or see [Public Web preview deployment](docs/WEB_DEPLOYMENT.md).
+
+---
+
+## Mobile Web (no AI, no install)
+
+**[📱 Open Jobsmith Web on your phone](https://jobsmith-web.onrender.com)**
+
+No app installation, AI account, or API key is required. The public Web preview lets you:
+
+- Upload a PDF, DOCX, or TXT resume from your phone, then review and freely edit the target roles.
+- Search 104, Cake, Yourator, LinkedIn, and other sources with deterministic 0-AI matching and a market-skills radar.
+- Refine the current results by keyword, location, source, work mode, fit, experience, and salary without rerunning the search.
+- Wait in an automatic queue during traffic spikes; identical search scopes briefly share public job-source data to reduce latency and third-party load.
+
+The public site creates no account and does not write resumes, Profiles, personal match scores, or search history to a server database. Its short-lived shared cache contains only search keywords/scope and public job listings. Your full resume is still sent to the Jobsmith Web server for that request, so remove unnecessary phone, email, and address fields before testing. See [Privacy and Data Handling](docs/PRIVACY.md) for the exact data flow.
+
+The preview currently runs on free test infrastructure. A cold first visit can take about a minute, and traffic spikes can show a queue position. Use the desktop app below for AI application packages, resume audits, mock interviews, and durable local history.
 
 ---
 
 ## Feature Overview
 
-- **Auto job search**: upload a resume, let AI derive keywords, and search 104 / Yourator / LinkedIn / Cake.
+- **No-AI job discovery**: upload a resume, review or edit up to three target roles, and search 104 / Yourator / LinkedIn / Cake with deterministic local matching.
+- **[Mobile Web entry](https://jobsmith-web.onrender.com)**: the public mode provides deterministic resume recognition, job search, local result filtering, and links to original postings without an AI account.
 - **Ranked results**: stream search results, score fit, and open the right jobs for an application package.
 - **Package workbench**: generate tailored resume bullets, cover letters, interview prep, and company research.
 - **Resume health check**: audit ATS fit, show deep-check or fallback status, and keep local report history.
@@ -50,7 +70,7 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
    - **Local model** — a running **Ollama** server (default `http://127.0.0.1:11434/v1`) or **llama.cpp server** (default `http://127.0.0.1:8080/v1`), **or**
    - **BYOK** — `base_url` + `api_key` + `model` for any OpenAI-compatible endpoint (OpenAI, DeepSeek, Gemini, Groq, OpenRouter, Ollama, LM Studio, vLLM…).
 
-> **Requirements:** Windows 10/11 (64-bit; WebView2 is built into Windows 11). Your history, settings, and `.env` are saved next to the `.exe`; Jobsmith does not operate a hosted backend, and AI requests go only to the backend you choose.
+> **Requirements:** Windows 10/11 (64-bit; WebView2 is built into Windows 11). Desktop history, settings, and `.env` are saved next to the `.exe`, and AI requests go only to the backend you choose. The limited public Web preview has a separate [privacy model](docs/PRIVACY.md).
 
 **macOS**
 
@@ -89,6 +109,7 @@ To build the unsigned macOS `.app`, build the frontend on macOS and run: `python
 
 ## Table of Contents
 
+- [Mobile Web (no AI, no install)](#mobile-web-no-ai-no-install)
 - [Feature Overview](#feature-overview)
 - [Download](#download)
 - [Quick Start](#quick-start-from-source)
@@ -107,10 +128,11 @@ To build the unsigned macOS `.app`, build the frontend on macOS and run: `python
 
 ## Features
 
-- **Auto job search** — paste or upload a résumé; the system derives keywords and searches 104 / Yourator / LinkedIn / Cake **in parallel**, ranking by fit in **streaming batches** (results appear as they're scored). Pick your **region(s) before searching** (applied at-source on 104, result-side on the others), filter by **fit band** (high / mid-and-up / all), set pages per source, and track named companies in a separate section.
-- **Search history** — every search is auto-saved; revisit it, regenerate a package, or delete it.
+- **Auto job search** — the default **no-AI mode** recognizes roles, skills, and experience locally, then lets you confirm or edit up to three target roles before searching 104 / Yourator / LinkedIn / Cake **in parallel**. Optional scope controls cover region, confirmed/inferred remote or hybrid work, experience, salary, named companies, and source depth. Once results arrive, refine the current pool instantly without another source or AI call.
+- **Market skills radar** — summarizes recurring skills in the current relevant job pool, separating evidence already found in the resume from common gaps without treating missing job-source fields as candidate weaknesses.
+- **Search history** — every desktop search is auto-saved; revisit it, apply the same local refinements, regenerate a package, or delete it.
 - **Résumé health check** — scores against Taiwan ATS conventions with concrete fixes and before/after rewrites.
-- **Application-package workbench** — click *Generate* on any job and a multi-agent pipeline (parse JD → match score → company research → tailored résumé → cover letter → interview kit → critique) runs **in the background**: it keeps going if you navigate away or refresh the page, and several jobs run **in parallel**. The workbench is a clean, single-screen viewer — a live agent-orchestration trace on the left, the finished documents paginated on the right.
+- **Application-package workbench** — generation is progressive and artifact-on-demand: the default quick path produces a tailored resume, while a short letter, company research, interview kit, and one-pass AI review are explicit options. Existing job-search analysis is reused, automatic rewrite loops are removed, and each selected artifact is saved as soon as it is ready.
 - **My packages (library)** — every generated package lands here with a status (in-progress → pending review → approved). **Review, approve, or delete** each, re-open one to the workbench, launch a mock interview from it, and export to **Word (.docx)** (PDF via the browser's print dialog).
 - **Mock interview** — generates questions from the JD and your résumé, with per-answer feedback and scores. Start from any saved package or a pasted JD; **each job gets its own conversation tab**, so you can run several mock interviews side by side without overwriting.
 - **Personalization** — remembers your most recent résumé (no re-upload) and preferences (target titles, tone, skills to emphasize) across sessions, and applies them to outputs.
@@ -126,11 +148,11 @@ Pick your AI engine from the **top-right control panel** — a **local CLI subsc
 | `ollama`     | Local model                            | Defaults to Ollama; can be switched to llama.cpp server or a custom local OpenAI-compatible endpoint. Detects local models for dropdown selection; quality and speed depend on your hardware and model. |
 | `openai`     | BYOK — any OpenAI-compatible endpoint  | `base_url` + `api_key` + `model`. Works with OpenAI, DeepSeek, Gemini, Groq, OpenRouter, Ollama, LM Studio, vLLM… |
 
-CLI backends call the corresponding provider through the logged-in CLI on your machine. Local models and BYOK both call the OpenAI-compatible endpoint you configure. Jobsmith does not operate a hosted backend or send your data to the project maintainer's server. BYOK and local model settings are written only to your local `.env`. An API-key backend (`anthropic`) also exists for self-hosting or CI.
+CLI backends call the corresponding provider through the logged-in CLI on your machine. Local models and BYOK both call the OpenAI-compatible endpoint you configure. Full AI features remain local-first or self-hosted; BYOK and local-model settings are written only to your local `.env`. The public Web preview accepts no AI keys. An API-key backend (`anthropic`) also exists for self-hosting or CI.
 
 ## Privacy and Data
 
-Jobsmith stores profile memory, preferences, searches, generated packages, `.env`, and error logs locally. You can open **Settings → Clear personal data** to remove resume memory, searches, and generated package history; AI backend settings are kept so you do not need to re-enter API keys.
+The desktop app stores profile memory, preferences, searches, generated packages, `.env`, and error logs locally. The public Web preview creates no account or server-side resume record, but the server processes each upload for that request and the browser retains compact search results locally. Use **Settings → Clear personal data** on desktop, or clear the site's browser data for the Web preview.
 
 When you run AI features, your résumé, job descriptions, and prompts are sent to the AI backend you selected. Read [Privacy and Data Handling](docs/PRIVACY.md) before using the app with sensitive data.
 

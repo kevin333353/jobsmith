@@ -7,6 +7,7 @@ def _payload():
         "companyJobs": [],
         "skillGap": {"top_demand": []},
         "queries": ["AI 工程師"],
+        "searchMode": "local",
     }
 
 
@@ -16,6 +17,7 @@ def test_save_list_get_delete():
     row = next(r for r in rows if r["id"] == sid)
     assert row["label"] == "徐凱瑞的搜尋"
     assert row["ai_count"] == 1 and row["company_count"] == 0
+    assert row["search_mode"] == "local"
     full = searches.get_search(sid)
     assert full["payload"]["queries"] == ["AI 工程師"]
     assert full["profile"]["name"] == "徐凱瑞"
