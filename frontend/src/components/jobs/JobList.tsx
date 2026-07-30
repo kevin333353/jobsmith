@@ -7,6 +7,7 @@ import { Badge } from "../../ui/Badge"
 import { Sparkles, ExternalLink, ChevronLeft, ChevronRight } from "../../ui/icons"
 import { jobExperienceLabel } from "./experience"
 import { getPaginationItems } from "./pagination"
+import { jobWorkModeBadge } from "../../lib/workMode"
 
 const PAGE_SIZE = 8
 
@@ -29,6 +30,7 @@ function FitBadge({ score }: { score: number }) {
 
 function JobCard({ m, onPick, pending }: { m: JobMatch; onPick: (m: JobMatch) => void; pending?: boolean }) {
   const exp = jobExperienceLabel(m.job)
+  const workMode = jobWorkModeBadge(m.job)
   return (
     <Card interactive className="p-4 flex flex-col sm:flex-row gap-4 animate-fade-in-up">
       <FitBadge score={m.fit_score} />
@@ -37,6 +39,7 @@ function JobCard({ m, onPick, pending }: { m: JobMatch; onPick: (m: JobMatch) =>
           <a href={m.job.url} target="_blank" rel="noreferrer"
             className="font-medium text-slate-900 hover:text-brand-700 hover:underline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">{m.job.title}</a>
           <Badge tone={m.job.source === "careers" ? "brand" : "slate"}>{SRC_LABEL[m.job.source] || m.job.source}</Badge>
+          {workMode && <Badge tone={workMode.tone}>{workMode.label}</Badge>}
         </div>
         <p className="text-sm text-slate-600 mt-0.5">
           {m.job.company}

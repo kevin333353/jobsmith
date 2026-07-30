@@ -93,6 +93,45 @@ def test_source_104_area_param(monkeypatch):
     assert "&area=" not in seen["url"]                       # 不限地區時不帶 area
 
 
+def test_source_104_uses_official_full_remote_filter(monkeypatch):
+    seen = []
+    payload = {"data": [{
+        "jobName": "Backend", "custName": "C", "link": {"job": "https://x/remote"},
+    }]}
+
+    def fake_get(url, **kwargs):
+        seen.append(url)
+        return FakeResp(json_data=payload)
+
+    monkeypatch.setattr(source_104, "http_get", fake_get)
+    result = source_104.search("Python", work_modes=["remote"])
+
+    assert len(seen) == 1 and "&remoteWork=1" in seen[0]
+    assert result.jobs[0].work_mode == "remote"
+    assert result.jobs[0].work_mode_origin == "source"
+
+
+def test_source_104_hybrid_requires_inferred_mode(monkeypatch):
+    calls = []
+    payload = {"data": [{
+        "jobName": "Backend", "custName": "C", "descSnippet": "每週兩天遠端工作",
+        "link": {"job": "https://x/hybrid"},
+    }]}
+    monkeypatch.setattr(
+        source_104,
+        "http_get",
+        lambda url, **kwargs: calls.append(url) or FakeResp(json_data=payload),
+    )
+
+    strict = source_104.search("Python", work_modes=["hybrid"])
+    inferred = source_104.search("Python", work_modes=["hybrid"], include_inferred=True)
+
+    assert strict.jobs == []
+    assert len(calls) == 1 and "&remoteWork=" not in calls[0]
+    assert inferred.jobs[0].work_mode == "hybrid"
+    assert inferred.jobs[0].work_mode_origin == "inferred"
+
+
 def test_source_104_pages_default_one(monkeypatch):
     # 預設 pages=1 只抓第一頁（維持舊行為）
     calls = []
@@ -173,6 +212,35 @@ def test_source_yourator_parses(monkeypatch):
     assert "Python" in j.requirements
 
 
+def test_source_yourator_reads_remote_type_from_curated_job_detail(monkeypatch):
+    payload = {"payload": {"jobs": [{
+        "name": "Product Manager", "location": "台北市", "salary": "面議",
+        "path": "/companies/x/jobs/1", "tags": [],
+        "company": {"brand": "某公司"},
+    }]}}
+    detail = """
+    <div class="remote-content">
+      <strong>部分遠端面試</strong>
+      <strong>部分遠端工作</strong>
+    </div>
+    """
+    seen = []
+
+    def fake_get(url, **kwargs):
+        seen.append(url)
+        if "/api/v4/events/71/jobs" in url:
+            return FakeResp(json_data=payload)
+        return FakeResp(text=detail)
+
+    monkeypatch.setattr(source_yourator, "http_get", fake_get)
+    result = source_yourator.search("PM", work_modes=["hybrid"])
+
+    assert "/api/v4/events/71/jobs" in seen[0]
+    assert len(seen) == 2
+    assert result.jobs[0].work_mode == "hybrid"
+    assert result.jobs[0].work_mode_origin == "source"
+
+
 def test_source_cake_blocked_when_no_next_data(monkeypatch):
     monkeypatch.setattr(source_cake, "http_get", lambda *a, **k: FakeResp(text="<html>no data</html>"))
     res = source_cake.search("AI")
@@ -201,6 +269,28 @@ def test_source_cake_parses_entity_state(monkeypatch):
     assert j.salary == "年薪 TWD 1,500,000–2,100,000"
     assert j.location == "台北市, 台灣"
     assert "Python" in j.requirements
+
+
+@pytest.mark.parametrize(
+    ("mode", "query", "expected"),
+    [
+        ("remote", "remote=full_remote_work", "remote"),
+        ("hybrid", "remote=partial_remote_work%2Coptional_remote_work", "hybrid"),
+    ],
+)
+def test_source_cake_uses_official_remote_filters(monkeypatch, mode, query, expected):
+    seen = []
+    monkeypatch.setattr(
+        source_cake,
+        "http_get",
+        lambda url, **kwargs: seen.append(url) or FakeResp(text=_CAKE_HTML),
+    )
+
+    result = source_cake.search("AI", limit=5, work_modes=[mode])
+
+    assert query in seen[0]
+    assert result.jobs[0].work_mode == expected
+    assert result.jobs[0].work_mode_origin == "source"
 
 
 def test_source_cake_blocked_when_no_entities(monkeypatch):
@@ -239,6 +329,21 @@ def test_source_linkedin_parses(monkeypatch):
     assert j.location == "Taipei City, Taiwan"
     assert j.url == "https://tw.linkedin.com/jobs/view/ai-engineer-123"  # query 已去除
     assert j.source == "linkedin"
+
+
+@pytest.mark.parametrize(("mode", "query"), [("remote", "f_WT=2"), ("hybrid", "f_WT=3")])
+def test_source_linkedin_uses_workplace_type_filter(monkeypatch, mode, query):
+    seen = []
+    monkeypatch.setattr(
+        source_linkedin,
+        "http_get",
+        lambda url, **kwargs: seen.append(url) or FakeResp(text=_LI_HTML),
+    )
+
+    result = source_linkedin.search("AI", limit=5, work_modes=[mode])
+
+    assert query in seen[0]
+    assert all(j.work_mode == mode and j.work_mode_origin == "source" for j in result.jobs)
 
 
 def test_source_linkedin_blocked_on_empty(monkeypatch):
@@ -281,7 +386,23 @@ def test_registry_search_all_passes_pages(monkeypatch):
     assert seen["area"] == ["6001001000"]          # area 也應下傳給來源
 
 
-def test_all_real_sources_accept_area_param():
+def test_registry_search_all_passes_work_mode_options(monkeypatch):
+    from app.models import SearchResult
+    from app.sources import registry
+    seen = {}
+
+    def fake(kw, limit=15, pages=1, area=None, work_modes=None, include_inferred=False):
+        seen["work_modes"] = work_modes
+        seen["include_inferred"] = include_inferred
+        return SearchResult(source="104")
+
+    monkeypatch.setattr(registry, "SEARCHABLE", {"104": fake})
+    registry.search_all("AI", work_modes=["remote"], include_inferred=True)
+
+    assert seen == {"work_modes": ["remote"], "include_inferred": True}
+
+
+def test_all_real_sources_accept_shared_filter_params():
     # 回歸：search_all 以位置參數傳 (keywords, limit, pages, area) 給每個來源；
     # 任一來源的 search() 漏掉 area，每次搜尋都會丟 TypeError → 被當成 blocked
     # （LinkedIn 曾因此每次都顯示「暫無」）。確保所有真實來源都吃得下 area。
@@ -291,6 +412,8 @@ def test_all_real_sources_accept_area_param():
     for name, fn in registry.SEARCHABLE.items():
         params = list(inspect.signature(fn).parameters)
         assert "area" in params, f"{name} 的 search() 缺少 area 參數（會被 search_all 當成 blocked）"
+        assert "work_modes" in params, f"{name} 的 search() 缺少 work_modes 參數"
+        assert "include_inferred" in params, f"{name} 的 search() 缺少 include_inferred 參數"
 
 
 def test_linkedin_search_url():
@@ -298,6 +421,11 @@ def test_linkedin_search_url():
     url = linkedin_search_url("AI 工程師")
     assert url.startswith("https://www.linkedin.com/jobs/search/")
     assert "Taiwan" in url
+    assert "f_WT" not in url
+    assert "f_WT=2%2C3" in linkedin_search_url(
+        "AI 工程師",
+        work_modes=["remote", "hybrid"],
+    )
 
 
 def test_regions_parse_and_codes():

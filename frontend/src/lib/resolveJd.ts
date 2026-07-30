@@ -1,11 +1,14 @@
 import type { JobPosting } from "../types"
+import { jobWorkModeBadge } from "./workMode"
 
 // 由職缺欄位組出基本 JD（抓不到完整 JD 時的後備）。
 export function buildJd(j: JobPosting): string {
+  const workMode = jobWorkModeBadge(j)
   return [
     j.title,
     `公司：${j.company}`,
     j.location ? `地點：${j.location}` : "",
+    workMode ? `工作型態：${workMode.label}` : "",
     j.salary ? `薪資：${j.salary}` : "",
     "",
     j.snippet || "",
@@ -25,10 +28,12 @@ export async function resolveJd(j: JobPosting): Promise<string> {
     if (r.ok) {
       const d = await r.json()
       if (d.text && d.text.length > (j.snippet?.length || 0)) {
+        const workMode = jobWorkModeBadge(j)
         const head = [
           d.title || j.title,
           `公司：${d.company || j.company}`,
           j.location ? `地點：${j.location}` : "",
+          workMode ? `工作型態：${workMode.label}` : "",
           j.salary ? `薪資：${j.salary}` : "",
         ].filter(Boolean).join("\n")
         jd = `${head}\n\n${d.text}`

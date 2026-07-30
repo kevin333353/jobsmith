@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react"
 import type { CandidateProfile, JobMatch, UserProfile, JobsAutoEvent } from "../types"
 import { readSSE } from "../sse"
@@ -8,14 +8,27 @@ import { newTaskId, stopTask } from "../lib/taskControl"
 import { profileDisplayName, profileSummary } from "../lib/profiles"
 import { EXPERIENCE_FILTER_OPTIONS } from "../components/jobs/experience"
 import { JobList } from "../components/jobs/JobList"
+import { ResultRefinementBar } from "../components/jobs/ResultRefinementBar"
+import {
+  createEmptyResultRefinement,
+  filterJobMatches,
+  normalizeResultRefinement,
+  type ResultRefinementState,
+} from "../components/jobs/resultRefinement"
 import { appendSalaryFilter, type SalaryUnit } from "../components/jobs/salaryFilter"
+import {
+  appendWorkModeFilter,
+  normalizeWorkModeFilters,
+  WORK_MODE_OPTIONS,
+  type WorkModeFilter,
+} from "../lib/workMode"
 import { SRC_LABEL } from "../lib/sources"
 import { Card } from "../ui/Card"
 import { Button } from "../ui/Button"
 import { Badge } from "../ui/Badge"
 import { Skeleton } from "../ui/Skeleton"
 import { EmptyState } from "../ui/EmptyState"
-import { Search, Upload, Loader2, ExternalLink, AlertTriangle, CheckCircle2, XCircle, Building2, Layers, MapPin, X, UserRound, Timer, Coins } from "../ui/icons"
+import { Search, Upload, Loader2, ExternalLink, AlertTriangle, CheckCircle2, XCircle, Building2, Layers, MapPin, Laptop, X, UserRound, Timer, Coins } from "../ui/icons"
 
 const SNAP_KEY = "copilot.jobsearch.v1"  // 上次搜尋結果快取（重新整理/重開沿用）
 
@@ -30,8 +43,6 @@ type SearchAcc = {
 const sortByFit = (arr: JobMatch[]) =>
   [...arr].sort((a, b) => b.fit_score - a.fit_score || (a.job.url < b.job.url ? -1 : a.job.url > b.job.url ? 1 : 0))
 
-// 適配色帶分段篩選（內部仍用 fit_score）：全部 / 高(≥80) / 中以上(≥60)。
-const FIT_BANDS = [{ v: 0, l: "全部" }, { v: 80, l: "高" }, { v: 60, l: "中以上" }]
 // 搜尋地點（縣市，對應後端 app/sources/regions.py）：搜尋前選定、所有來源一致生效；不選＝全台。
 const COUNTIES = [
   "台北市", "新北市", "桃園市", "台中市", "台南市", "高雄市",
@@ -67,8 +78,9 @@ export function JobSearchView(
   const [jobs, setJobs] = useState<JobMatch[]>([])
   const [companyJobs, setCompanyJobs] = useState<JobMatch[]>([])
   const [rankTotal, setRankTotal] = useState(0)
-  const [minFit, setMinFit] = useState(0)            // 適配色帶門檻（0/60/80）
   const [regions, setRegions] = useState<string[]>([])  // 搜尋地點（縣市 key；空 = 全台）
+  const [workModes, setWorkModes] = useState<WorkModeFilter[]>([])
+  const [includeInferredWorkMode, setIncludeInferredWorkMode] = useState(false)
   const [linkedin, setLinkedin] = useState("")
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [blockedNote, setBlockedNote] = useState("")
@@ -84,6 +96,9 @@ export function JobSearchView(
   const [minSalary, setMinSalary] = useState("")
   const [maxSalary, setMaxSalary] = useState("")
   const [includeUnknownSalary, setIncludeUnknownSalary] = useState(true)
+  const [resultRefinement, setResultRefinement] = useState<ResultRefinementState>(
+    createEmptyResultRefinement,
+  )
 
   const abortRef = useRef<AbortController | null>(null)  // 取消上一個未完成的搜尋
   const taskIdRef = useRef("")
@@ -112,6 +127,11 @@ export function JobSearchView(
       if (typeof s.maxSalary === "string") setMaxSalary(s.maxSalary)
       if (typeof s.includeUnknownSalary === "boolean") setIncludeUnknownSalary(s.includeUnknownSalary)
       if (Array.isArray(s.regions)) setRegions(s.regions)
+      setWorkModes(normalizeWorkModeFilters(s.workModes))
+      if (typeof s.includeInferredWorkMode === "boolean") {
+        setIncludeInferredWorkMode(s.includeInferredWorkMode)
+      }
+      setResultRefinement(normalizeResultRefinement(s.resultRefinement))
       if (s.profile) setProfile(s.profile as UserProfile)
       if (Array.isArray(s.jobs) && s.jobs.length) { setDone(true); setFormOpen(false) }
       else if (Array.isArray(s.companyJobs) && s.companyJobs.length) { setDone(true); setFormOpen(false) }
@@ -126,12 +146,14 @@ export function JobSearchView(
       localStorage.setItem(SNAP_KEY, JSON.stringify({
         text, companies, jobs, companyJobs, queries, sources,
         linkedin, fallback, searchedCompanies, profile, pages, regions, maxExperienceYears,
-        salaryUnit, minSalary, maxSalary, includeUnknownSalary,
+        salaryUnit, minSalary, maxSalary, includeUnknownSalary, workModes, includeInferredWorkMode,
+        resultRefinement,
       }))
     } catch { /* localStorage 不可用/已滿則略過 */ }
   }, [done, jobs, companyJobs, queries, sources, linkedin, fallback,
       searchedCompanies, profile, text, companies, pages, regions, maxExperienceYears,
-      salaryUnit, minSalary, maxSalary, includeUnknownSalary])
+      salaryUnit, minSalary, maxSalary, includeUnknownSalary, workModes, includeInferredWorkMode,
+      resultRefinement])
 
   // 回報是否已有結果，App 才知道要不要在右上角顯示「收合搜尋條件」鈕。
   useEffect(() => {
@@ -158,6 +180,11 @@ export function JobSearchView(
   function toggleRegion(k: string) {
     setRegions((rs) => (rs.includes(k) ? rs.filter((x) => x !== k) : [...rs, k]))
   }
+  function toggleWorkMode(mode: WorkModeFilter) {
+    setWorkModes((modes) => (
+      modes.includes(mode) ? modes.filter((m) => m !== mode) : [...modes, mode]
+    ))
+  }
 
   async function saveSearch(acc: SearchAcc, cs: string[]) {
     if (!acc.jobs.length && !acc.companyJobs.length) return
@@ -172,6 +199,7 @@ export function JobSearchView(
             jobs: acc.jobs, companyJobs: acc.companyJobs,
             queries: acc.queries, sources: acc.sources, searchedCompanies: cs,
             linkedin: acc.linkedin, fallback: acc.fallback,
+            workModes, includeInferredWorkMode,
           },
         }),
       })
@@ -188,6 +216,7 @@ export function JobSearchView(
       max: maxSalary,
       includeUnknown: includeUnknownSalary,
     })
+    appendWorkModeFilter(form, workModes, includeInferredWorkMode)
   }
 
   async function go(
@@ -211,6 +240,7 @@ export function JobSearchView(
     stoppingRef.current = false
 
     setBusy(true); setDone(false); setError(""); setJobs([]); setCompanyJobs([]); setQueries([]); setSources([])
+    setResultRefinement(createEmptyResultRefinement())
     setLinkedin(""); setProfile(null); setBlockedNote(""); setFallback(false); setRankTotal(0)
     setStatus(opts.initialStatus || "上傳中…")
     // 串流累積（供完成後存檔；state 更新非同步，存檔讀這裡的即時值）。
@@ -311,16 +341,33 @@ export function JobSearchView(
 
   const pick = async (m: JobMatch) => onPick(await resolveJd(m.job), profile)
 
-  const passes = (m: JobMatch) => m.fit_score >= minFit  // 地區已在搜尋時於後端套用
-  const visibleJobs = jobs.filter(passes)
-  const visibleCompany = companyJobs.filter(passes)
-  const hiddenCount = (jobs.length - visibleJobs.length) + (companyJobs.length - visibleCompany.length)
+  const allMatches = useMemo(() => [...jobs, ...companyJobs], [jobs, companyJobs])
+  const visibleJobs = useMemo(
+    () => filterJobMatches(jobs, resultRefinement),
+    [jobs, resultRefinement],
+  )
+  const visibleCompany = useMemo(
+    () => filterJobMatches(companyJobs, resultRefinement),
+    [companyJobs, resultRefinement],
+  )
+  const visibleCount = visibleJobs.length + visibleCompany.length
   const hasResults = jobs.length > 0 || companyJobs.length > 0
 
   return (
     <div>
       {(formOpen || !hasResults) && (
       <Card className="p-5 mb-5">
+        <div className="mb-3 flex items-start gap-2.5">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-600">
+            <Layers className="h-4 w-4" />
+          </span>
+          <div>
+            <h2 className="font-semibold text-slate-900">搜尋範圍</h2>
+            <p className="text-xs text-slate-500">
+              這裡決定要從求職網站抓取哪些職缺；修改後需要重新搜尋並評分。
+            </p>
+          </div>
+        </div>
         <p className="text-sm text-slate-600 mb-2">
           丟上你的履歷，AI 自動推導關鍵字、搜尋 104 / Yourator / LinkedIn / Cake 並依履歷排序；
           也可加入想去的公司，單獨列出它們的開缺。填好後按「開始自動找職缺」。
@@ -336,7 +383,7 @@ export function JobSearchView(
               </p>
             </div>
             <Button variant="secondary" size="sm" icon={Search} onClick={onStartWithActiveProfile} disabled={busy}>
-              用目前 Profile 搜尋
+              {hasResults ? "用目前 Profile 重新搜尋" : "用目前 Profile 搜尋"}
             </Button>
           </div>
         )}
@@ -472,6 +519,62 @@ export function JobSearchView(
 
         <div className="mt-4">
           <label className="text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
+            <Laptop className="w-4 h-4 text-slate-400" />工作型態（選填、可多選）
+          </label>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setWorkModes([])}
+              disabled={busy}
+              aria-pressed={workModes.length === 0}
+              className={`px-2.5 py-1 rounded-lg border text-xs transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 disabled:opacity-50 ${
+                workModes.length === 0
+                  ? "bg-brand-600 text-white border-brand-600"
+                  : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              不限工作型態
+            </button>
+            {WORK_MODE_OPTIONS.map((option) => {
+              const on = workModes.includes(option.value)
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => toggleWorkMode(option.value)}
+                  disabled={busy}
+                  aria-pressed={on}
+                  className={`px-2.5 py-1 rounded-lg border text-xs transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 disabled:opacity-50 ${
+                    on
+                      ? "bg-brand-600 text-white border-brand-600"
+                      : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              )
+            })}
+            <label className={`ml-1 inline-flex items-center gap-1.5 text-xs ${
+              workModes.length ? "text-slate-600" : "text-slate-400"
+            }`}>
+              <input
+                type="checkbox"
+                checked={includeInferredWorkMode}
+                onChange={(e) => setIncludeInferredWorkMode(e.target.checked)}
+                disabled={busy || workModes.length === 0}
+                className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-300 disabled:opacity-50"
+              />
+              包含 JD 文字推測
+            </label>
+          </div>
+          <p className="text-xs text-slate-400 mt-1">
+            預設只顯示網站明確標示的結果；勾選文字推測會找到更多職缺，但可能需要向公司再次確認。
+            結果卡會標明判斷依據。
+          </p>
+        </div>
+
+        <div className="mt-4">
+          <label className="text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
             <MapPin className="w-4 h-4 text-slate-400" />搜尋地點（選填、可多選；不選＝全台）
           </label>
           <div className="flex flex-wrap gap-1.5">
@@ -493,7 +596,9 @@ export function JobSearchView(
         </div>
 
         <div className="flex flex-wrap gap-2 mt-4 items-center">
-          <Button onClick={onStart} loading={busy} icon={Search}>開始自動找職缺</Button>
+          <Button onClick={onStart} loading={busy} icon={Search}>
+            {hasResults ? "重新搜尋並評分" : "開始自動找職缺"}
+          </Button>
           {busy && <Button variant="danger" onClick={stopSearch} icon={XCircle}>停止</Button>}
           <Button variant="secondary" onClick={() => { setFile(null); setText(SAMPLE_RESUME) }} disabled={busy}>載入範例履歷</Button>
           <label className={`inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition cursor-pointer focus-within:ring-2 focus-within:ring-brand-300 ${busy ? "opacity-50 pointer-events-none" : ""}`}>
@@ -542,7 +647,7 @@ export function JobSearchView(
         </div>
       )}
 
-      {/* 結果標題 + 進度 + 適配色帶篩選 */}
+      {/* 結果標題 + 進度 */}
       {(jobs.length > 0 || (busy && rankTotal > 0)) && (
         <div className="flex flex-wrap items-center gap-3 mb-3">
           <h2 className="font-semibold flex items-center gap-2">
@@ -555,16 +660,16 @@ export function JobSearchView(
             </span>
           )}
           {busy && <Button size="sm" variant="danger" onClick={stopSearch} icon={XCircle}>停止</Button>}
-          <div className="ml-auto flex items-center gap-1.5 text-sm" role="group" aria-label="適配篩選">
-            <span className="text-slate-500">適配</span>
-            {FIT_BANDS.map((o) => (
-              <button key={o.v} type="button" onClick={() => setMinFit(o.v)} aria-pressed={minFit === o.v}
-                className={`px-2.5 py-1 rounded-lg border text-xs transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 ${
-                  minFit === o.v ? "bg-brand-600 text-white border-brand-600" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
-                }`}>{o.l}</button>
-            ))}
-          </div>
         </div>
+      )}
+
+      {hasResults && (
+        <ResultRefinementBar
+          matches={allMatches}
+          value={resultRefinement}
+          visibleCount={visibleCount}
+          onChange={setResultRefinement}
+        />
       )}
 
       {busy && jobs.length === 0 && (
@@ -587,7 +692,9 @@ export function JobSearchView(
           <EmptyState
             icon={Search}
             title="這次沒有取得職缺結果"
-            desc="即時來源可能暫時被擋，可調整履歷關鍵字再試。"
+            desc={workModes.length
+              ? "目前工作型態條件沒有符合結果；可增加搜尋頁數、改選其他型態，或開啟 JD 文字推測後再試。"
+              : "即時來源可能暫時被擋，可調整履歷關鍵字再試。"}
             action={linkedin ? (
               <a href={linkedin} target="_blank" rel="noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300">
@@ -600,7 +707,7 @@ export function JobSearchView(
 
       {visibleJobs.length > 0 && <JobList matches={visibleJobs} onPick={pick} />}
       {jobs.length > 0 && visibleJobs.length === 0 && (
-        <p className="text-sm text-slate-400">目前適配篩選沒有符合的職缺，放寬條件看看。</p>
+        <p className="text-sm text-slate-400">目前結果篩選沒有符合的職缺，放寬條件看看。</p>
       )}
 
       {/* 指定公司的職缺（獨立區塊、獨立排序） */}
@@ -613,7 +720,7 @@ export function JobSearchView(
           {visibleCompany.length > 0 ? (
             <JobList matches={visibleCompany} onPick={pick} />
           ) : companyJobs.length > 0 ? (
-            <p className="text-sm text-slate-400">目前適配篩選沒有符合的公司職缺。</p>
+            <p className="text-sm text-slate-400">目前結果篩選沒有符合的公司職缺。</p>
           ) : (
             <Card className="p-2">
               <EmptyState icon={Building2} title="指定公司目前查無相關開缺"
@@ -623,9 +730,6 @@ export function JobSearchView(
         </div>
       )}
 
-      {hiddenCount > 0 && (
-        <p className="text-xs text-slate-400 mt-3">已依篩選條件隱藏 {hiddenCount} 筆職缺。</p>
-      )}
     </div>
   )
 }

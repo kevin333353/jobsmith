@@ -47,6 +47,7 @@ export {
   Trash2,
   Layers,
   MapPin,
+  Laptop,
   KeyRound,
   Check,
   CircleDot,
