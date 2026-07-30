@@ -12,7 +12,7 @@
 
 **如果這個工具對你找工作或研究 AI Agent 有幫助，歡迎按 Star 支持開源。**
 
-[English](README.en.md) · [**下載（Windows / macOS unsigned）**](#下載) · [快速開始](#快速開始從原始碼) · [系統架構](#系統架構) · [隱私](docs/PRIVACY.md)
+[English](README.en.md) · [**手機 Web（免 AI、免安裝）**](https://jobsmith-web.onrender.com) · [**下載桌面版（Windows / macOS unsigned）**](#下載) · [快速開始](#快速開始從原始碼) · [系統架構](#系統架構) · [隱私](docs/PRIVACY.md)
 
 ![License](https://img.shields.io/badge/License-Apache_2.0-green)
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
@@ -26,14 +26,31 @@
 
 > 應用程式介面為繁體中文，貼合台灣求職生態（104 / Cake / Yourator / LinkedIn）。預設的「免 AI 找職缺」不需要 AI 帳號或 API key；資料以本機保存為主。只有明確選用 AI 功能時，履歷與 prompt 才會交給你選擇的 CLI、本機模型或 BYOK 後端處理。詳見 [隱私與資料處理](docs/PRIVACY.md)。
 >
-> 另提供手機可用的**公開 Web 測試模式**：免帳號、強制 0 AI、不保存伺服器端履歷／搜尋紀錄，只開放上傳履歷找職缺與瀏覽器端篩選。部署與限制請見 [公開 Web 測試版部署](docs/WEB_DEPLOYMENT.md)。
+> 另提供手機可用的**公開 Web 測試模式**：免帳號、強制 0 AI、不保存伺服器端履歷／搜尋紀錄，只開放上傳履歷找職缺與瀏覽器端篩選。[立即開啟 Jobsmith Web](https://jobsmith-web.onrender.com)，部署與限制請見 [公開 Web 測試版部署](docs/WEB_DEPLOYMENT.md)。
+
+---
+
+## 手機 Web（免 AI、免安裝）
+
+**[📱 立即用手機開啟 Jobsmith Web](https://jobsmith-web.onrender.com)**
+
+不用安裝 App、不用 AI 帳號，也不需要 API key。公開 Web 測試版支援：
+
+- 手機上傳 PDF、DOCX 或 TXT 履歷，先確認並自由修改目標職稱。
+- 以 0 AI 本機規則搜尋 104、Cake、Yourator、LinkedIn 等來源，顯示可解釋配對與市場技能雷達。
+- 在目前結果中依關鍵字、地點、來源、遠端型態、適配度、年資與薪資即時篩選，不必重新搜尋。
+- 多人同時使用時自動排隊；相同搜尋範圍會短期共用公開職缺來源快取，減少等待與第三方網站負載。
+
+公開站不建立帳號，也不把履歷、Profile、個人配對結果或搜尋紀錄寫入伺服器資料庫；短期共用快取只包含搜尋關鍵字／範圍與公開職缺資料。完整履歷會送到 Jobsmith Web 伺服器做該次解析，因此仍建議先移除電話、Email 與地址等不必要欄位。詳細資料流向請見[隱私說明](docs/PRIVACY.md)。
+
+目前使用免費測試主機，閒置後第一次開啟可能需要約一分鐘喚醒，尖峰時會顯示排隊順位。需要 AI 投遞包、履歷健檢、面試模擬或長期本機紀錄時，請使用下方桌面版。
 
 ---
 
 ## 功能概覽
 
 - **免 AI 找職缺**：上傳履歷後在本機辨識職稱、技能與年資；搜尋前可確認或改寫最多三個目標職稱，即使不在內建詞庫也會照原文搜尋。免 AI 帳號、免 API key、0 token。
-- **手機 Web 入口**：公開模式只提供履歷辨識、找職缺、即時結果篩選與前往原職缺；桌面私有資料與 AI API 全部封鎖。
+- **[手機 Web 入口](https://jobsmith-web.onrender.com)**：公開模式只提供履歷辨識、找職缺、即時結果篩選與前往原職缺；桌面私有資料與 AI API 全部封鎖。
 - **可解釋職缺配對**：以職稱、技能、年資規則排序，分開標示適配度與職缺資料完整度，並列出符合點、待確認缺口及市場技能雷達。
 - **跨職類但不假裝全知**：內建常見科技、商務、行政、零售、餐旅、物流、製造、營建、醫護、教育、法律與服務業職稱；辨識不準時由使用者直接修正，不把未知職業硬套成工程師。
 - **投遞工作包**：產出客製履歷、求職信、面試準備與公司研究。
@@ -93,6 +110,7 @@ macOS unsigned `.app` 請在 macOS 上先建置前端，再執行：`python -m P
 
 ## 目錄
 
+- [手機 Web（免 AI、免安裝）](#手機-web免-ai免安裝)
 - [功能概覽](#功能概覽)
 - [下載](#下載)
 - [快速開始](#快速開始從原始碼)

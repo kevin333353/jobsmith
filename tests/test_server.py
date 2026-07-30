@@ -140,12 +140,25 @@ def test_runtime_and_health_endpoints_describe_desktop_process():
 
 
 def test_app_version_matches_pyproject():
-    # 防版本漂移：app.__version__（執行期/exe 用）必須與 pyproject.toml 一致。
+    # 防版本漂移：執行期、套件與 macOS app metadata 必須一致。
     import pathlib
     import re as _re
     txt = pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
     m = _re.search(r'^version\s*=\s*"([^"]+)"', txt, _re.M)
     assert m and m.group(1) == server_mod.__version__
+    mac_spec = pathlib.Path("jobsmith-macos.spec").read_text(encoding="utf-8")
+    assert (
+        mac_spec.count(
+            f'"CFBundleShortVersionString": "{server_mod.__version__}"',
+        )
+        == 1
+    )
+    assert (
+        mac_spec.count(
+            f'"CFBundleVersion": "{server_mod.__version__}"',
+        )
+        == 1
+    )
 
 
 def _patch_agents(monkeypatch):
