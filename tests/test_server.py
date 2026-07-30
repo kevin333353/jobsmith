@@ -9,7 +9,6 @@ from app.models import (
     InterviewKit,
     MatchReport,
     ParsedJob,
-    SupervisorDecision,
     TailoredResume,
 )
 from tests.client import TestClient
@@ -127,6 +126,19 @@ def test_update_check_endpoint(monkeypatch):
     assert r.status_code == 200 and r.json()["update_available"] is True
 
 
+def test_runtime_and_health_endpoints_describe_desktop_process():
+    client = TestClient(server_mod.app)
+
+    runtime = client.get("/api/runtime")
+    health = client.get("/api/healthz")
+
+    assert runtime.status_code == 200
+    assert runtime.json()["public_web"] is False
+    assert runtime.json()["persistence_enabled"] is True
+    assert health.status_code == 200
+    assert health.json() == {"ok": True, "mode": "desktop"}
+
+
 def test_app_version_matches_pyproject():
     # 防版本漂移：app.__version__（執行期/exe 用）必須與 pyproject.toml 一致。
     import pathlib
@@ -141,14 +153,6 @@ def _patch_agents(monkeypatch):
                         lambda jd_text: ParsedJob(title="AI 工程師", company="未來智能"))
     monkeypatch.setattr(graph_mod, "match_profile",
                         lambda job, profile: MatchReport(score=82, recommend_proceed=True, reason="吻合"))
-    monkeypatch.setattr(graph_mod, "supervise_after_match",
-                        lambda match, job, profile: SupervisorDecision(
-                            next_action="proceed" if (match.recommend_proceed and match.score >= 60)
-                            else "stop"))
-    monkeypatch.setattr(graph_mod, "supervise_after_critic",
-                        lambda critique, rc, mx: SupervisorDecision(
-                            next_action="approve" if (critique.overall_pass or rc >= mx) else "revise",
-                            docs_to_revise=[d for d in (critique.per_doc or {})]))
     monkeypatch.setattr(graph_mod, "research_company",
                         lambda name: CompanyBrief(company=name))
     monkeypatch.setattr(graph_mod, "tailor_resume",
@@ -246,6 +250,114 @@ def test_run_completes_in_background_and_saves_pending(monkeypatch):
     assert events[-1]["package_id"] == d["package_id"]
     full = server_mod._history.get_package(d["package_id"])
     assert full["status"] == "done" and full["approved"] == 0
+
+
+def test_run_defaults_to_quick_resume_only(monkeypatch):
+    _patch_agents(monkeypatch)
+    calls = {"company": 0, "cover": 0, "interview": 0, "critic": 0}
+
+    def count(name):
+        def inner(*args, **kwargs):
+            calls[name] += 1
+            raise AssertionError(f"{name} should not run in quick mode")
+        return inner
+
+    monkeypatch.setattr(graph_mod, "research_company", count("company"))
+    monkeypatch.setattr(graph_mod, "write_cover_letter", count("cover"))
+    monkeypatch.setattr(graph_mod, "prepare_interview", count("interview"))
+    monkeypatch.setattr(graph_mod, "critique_package", count("critic"))
+
+    client = TestClient(server_mod.app)
+    d, events = _run_bg(client, {"jd_text": "JD"})
+    assert calls == {"company": 0, "cover": 0, "interview": 0, "critic": 0}
+    config = next(e["data"] for e in events if e["type"] == "config")
+    assert config == {
+        "artifact_targets": ["resume"],
+        "company_research_requested": False,
+        "quality_review": False,
+    }
+    package = server_mod._history.get_package(d["package_id"])["package"]
+    assert package["tailored_resume"] is not None
+    assert package["cover_letter"] is None and package["interview_kit"] is None
+    assert package["artifact_targets"] == ["resume"]
+
+
+def test_run_selected_full_package_calls_each_optional_agent_once(monkeypatch):
+    _patch_agents(monkeypatch)
+    calls = {"company": 0, "cover": 0, "interview": 0, "critic": 0}
+
+    monkeypatch.setattr(
+        graph_mod, "research_company",
+        lambda name: (
+            calls.__setitem__("company", calls["company"] + 1)
+            or CompanyBrief(company=name)
+        ),
+    )
+    monkeypatch.setattr(
+        graph_mod, "write_cover_letter",
+        lambda *args, **kwargs: (
+            calls.__setitem__("cover", calls["cover"] + 1) or CoverLetter(body="信")
+        ),
+    )
+    monkeypatch.setattr(
+        graph_mod, "prepare_interview",
+        lambda *args, **kwargs: (
+            calls.__setitem__("interview", calls["interview"] + 1) or InterviewKit()
+        ),
+    )
+    monkeypatch.setattr(
+        graph_mod, "critique_package",
+        lambda *args, **kwargs: (
+            calls.__setitem__("critic", calls["critic"] + 1)
+            or CritiqueReport(
+                resume_score=90,
+                cover_letter_score=90,
+                interview_score=90,
+                overall_pass=True,
+            )
+        ),
+    )
+
+    client = TestClient(server_mod.app)
+    _run_bg(client, {
+        "jd_text": "JD",
+        "artifact_targets": ["resume", "cover_letter", "interview"],
+        "company_research_requested": True,
+        "quality_review": True,
+    })
+    assert calls == {"company": 1, "cover": 1, "interview": 1, "critic": 1}
+
+
+def test_run_rejects_empty_artifact_targets():
+    client = TestClient(server_mod.app)
+    r = client.post("/api/run", json={"jd_text": "JD", "artifact_targets": []})
+    assert r.status_code == 422
+
+
+def test_run_reuses_prefilled_search_analysis(monkeypatch):
+    _patch_agents(monkeypatch)
+    monkeypatch.setattr(
+        graph_mod, "parse_job",
+        lambda text: (_ for _ in ()).throw(AssertionError("parse should not run")),
+    )
+    monkeypatch.setattr(
+        graph_mod, "match_profile",
+        lambda job, profile: (_ for _ in ()).throw(AssertionError("match should not run")),
+    )
+    client = TestClient(server_mod.app)
+    d, _ = _run_bg(client, {
+        "jd_text": "既有 JD",
+        "parsed_job": {"title": "搜尋結果職缺", "company": "搜尋公司"},
+        "match_report": {
+            "score": 88,
+            "recommend_proceed": True,
+            "reason": "已在搜尋時完成配對",
+        },
+    })
+    full = server_mod._history.get_package(d["package_id"])
+    assert full["job_title"] == "搜尋結果職缺"
+    assert full["match_score"] == 88
+    assert full["package"]["tailored_resume"] is not None
 
 
 def test_two_runs_complete_independently(monkeypatch):
@@ -477,6 +589,247 @@ def test_jobs_auto_emits_profile_event(monkeypatch):
     prof = next(e for e in events if e["type"] == "profile")
     assert prof["data"]["name"] == "王小明"
     assert prof["data"]["raw_text"] == "我的履歷原文 Python"  # 含原文供 pipeline 帶入
+
+
+def test_jobs_auto_local_mode_never_touches_ai_and_emits_skill_gap(monkeypatch):
+    from app.models import JobMatch, JobPosting, Profile, SearchResult
+
+    def fail_ai(*args, **kwargs):
+        raise AssertionError("no-AI mode must not touch the configured AI backend")
+
+    monkeypatch.setattr(server_mod, "ensure_backend_live", fail_ai)
+    monkeypatch.setattr(server_mod, "structure_profile", fail_ai)
+    monkeypatch.setattr(server_mod, "derive_queries", fail_ai)
+    monkeypatch.setattr(server_mod, "rank_jobs", fail_ai)
+    monkeypatch.setattr(
+        server_mod,
+        "structure_profile_local",
+        lambda text: Profile(
+            name="王小明",
+            summary="後端工程師",
+            skills=["Python"],
+            preferred_roles=["後端工程師"],
+            raw_text=text,
+        ),
+    )
+    monkeypatch.setattr(server_mod, "derive_local_queries", lambda profile: ["後端工程師"])
+    job = JobPosting(
+        source="104",
+        title="Python 後端工程師",
+        company="A",
+        url="u1",
+        requirements=["Python", "FastAPI"],
+    )
+    monkeypatch.setattr(
+        server_mod,
+        "search_all",
+        lambda q, limit=15, pages=2, area=None: [SearchResult(source="104", jobs=[job])],
+    )
+    monkeypatch.setattr(
+        server_mod,
+        "rank_jobs_locally",
+        lambda profile, jobs, top_k=None: [
+            JobMatch(
+                job=jobs[0],
+                fit_score=82,
+                matched=["Python"],
+                ranking_mode="local",
+                evidence_level="high",
+            ),
+        ],
+    )
+
+    client = TestClient(server_mod.app)
+    response = client.post("/api/jobs/auto", data={
+        "resume_text": "王小明\nPython 後端工程師",
+        "search_mode": "local",
+    })
+    events = _parse_sse(response.text)
+
+    assert not any(event["type"] == "error" for event in events)
+    assert next(event for event in events if event["type"] == "rank_start")["mode"] == "local"
+    ranked = next(event for event in events if event["type"] == "ranked_batch")
+    assert ranked["data"][0]["ranking_mode"] == "local"
+    gap = next(event for event in events if event["type"] == "skill_gap")["data"]
+    assert gap["your_gaps"][0]["skill"] == "FastAPI"
+
+
+def test_public_web_forces_local_mode_caps_pages_and_omits_resume_text(monkeypatch):
+    from app.models import JobMatch, JobPosting, Profile, SearchResult
+
+    client = TestClient(server_mod.app)
+    captured = {}
+
+    def fail_ai(*args, **kwargs):
+        raise AssertionError("public Web mode must never touch an AI backend")
+
+    monkeypatch.setattr(server_mod, "PUBLIC_WEB", True)
+    monkeypatch.setattr(server_mod, "ensure_backend_live", fail_ai)
+    monkeypatch.setattr(server_mod, "structure_profile", fail_ai)
+    monkeypatch.setattr(server_mod, "derive_queries", fail_ai)
+    monkeypatch.setattr(server_mod, "rank_jobs", fail_ai)
+    monkeypatch.setattr(
+        server_mod,
+        "structure_profile_local",
+        lambda text: Profile(
+            name="手機測試者",
+            summary="護理師",
+            preferred_roles=["護理師"],
+            raw_text=text,
+        ),
+    )
+    monkeypatch.setattr(server_mod, "derive_local_queries", lambda profile: ["護理師"])
+    job = JobPosting(source="104", title="護理師", company="醫院", url="https://example.test/job")
+
+    def fake_search(query, limit=15, pages=2, area=None, **kwargs):
+        captured["pages"] = pages
+        return [SearchResult(source="104", jobs=[job])]
+
+    monkeypatch.setattr(server_mod, "search_all", fake_search)
+    monkeypatch.setattr(
+        server_mod,
+        "rank_jobs_locally",
+        lambda profile, jobs, top_k=None: [
+            JobMatch(job=jobs[0], fit_score=80, ranking_mode="local"),
+        ],
+    )
+
+    response = client.post("/api/jobs/auto", data={
+        "resume_text": "這是只供本次搜尋使用的履歷原文",
+        "search_mode": "ai",
+        "pages": "5",
+    })
+    events = _parse_sse(response.text)
+
+    assert response.headers["cache-control"] == "no-cache, no-transform"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert captured["pages"] == 2
+    assert next(event for event in events if event["type"] == "rank_start")["mode"] == "local"
+    profile = next(event for event in events if event["type"] == "profile")["data"]
+    assert profile["name"] == "手機測試者"
+    assert "raw_text" not in profile
+    assert not any(event["type"] == "error" for event in events)
+
+
+def test_resume_preview_is_local_compact_and_never_touches_ai(monkeypatch):
+    from app.models import Profile
+
+    def fail_ai(*args, **kwargs):
+        raise AssertionError("resume preview must remain local")
+
+    monkeypatch.setattr(server_mod, "ensure_backend_live", fail_ai)
+    monkeypatch.setattr(server_mod, "structure_profile", fail_ai)
+    monkeypatch.setattr(
+        server_mod,
+        "structure_profile_local",
+        lambda text: Profile(
+            name="合成候選人",
+            summary="護理師",
+            preferred_roles=["護理師"],
+            skills=["patient care"],
+            raw_text=text,
+        ),
+    )
+
+    client = TestClient(server_mod.app)
+    response = client.post("/api/resume/preview", data={"resume_text": "合成護理履歷"})
+
+    assert response.status_code == 200
+    assert response.json()["profile"]["preferred_roles"] == ["護理師"]
+    assert "raw_text" not in response.json()["profile"]
+
+
+def test_resume_preview_rejects_empty_input():
+    client = TestClient(server_mod.app)
+    response = client.post("/api/resume/preview", data={"resume_text": "   "})
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "請提供履歷檔案或文字"
+
+
+def test_public_resume_preview_rejects_unknown_file_type(monkeypatch):
+    client = TestClient(server_mod.app)
+    monkeypatch.setattr(server_mod, "PUBLIC_WEB", True)
+
+    response = client.post(
+        "/api/resume/preview",
+        files={"file": ("resume.exe", b"not a resume", "application/octet-stream")},
+    )
+
+    assert response.status_code == 400
+    assert "只支援 PDF、DOCX 或 TXT" in response.json()["error"]
+
+
+def test_resume_preview_rejects_excessive_text():
+    client = TestClient(server_mod.app)
+
+    response = client.post(
+        "/api/resume/preview",
+        data={"resume_text": "x" * (server_mod._MAX_RESUME_TEXT_CHARS + 1)},
+    )
+
+    assert response.status_code == 400
+    assert "100,000" in response.json()["error"]
+
+
+def test_jobs_auto_user_target_roles_override_inference_before_search(monkeypatch):
+    from app.models import JobMatch, JobPosting, Profile, SearchResult
+
+    captured = {}
+    monkeypatch.setattr(
+        server_mod,
+        "structure_profile_local",
+        lambda text: Profile(
+            name="合成候選人",
+            summary="原先辨識為行政",
+            preferred_roles=["行政人員"],
+            raw_text=text,
+        ),
+    )
+
+    def fake_queries(profile):
+        captured["query_roles"] = list(profile.preferred_roles)
+        return list(profile.preferred_roles)
+
+    def fake_rank(profile, jobs, top_k=None):
+        captured["rank_roles"] = list(profile.preferred_roles)
+        return [JobMatch(job=jobs[0], fit_score=80, ranking_mode="local")]
+
+    monkeypatch.setattr(server_mod, "derive_local_queries", fake_queries)
+    monkeypatch.setattr(
+        server_mod,
+        "search_all",
+        lambda q, limit=15, pages=2, area=None: [
+            SearchResult(
+                source="104",
+                jobs=[
+                    JobPosting(
+                        source="104",
+                        title=q,
+                        company="合成測試公司",
+                        url=f"https://example.com/{q}",
+                    ),
+                ],
+            ),
+        ],
+    )
+    monkeypatch.setattr(server_mod, "rank_jobs_locally", fake_rank)
+
+    client = TestClient(server_mod.app)
+    response = client.post(
+        "/api/jobs/auto",
+        data={
+            "resume_text": "合成履歷",
+            "search_mode": "local",
+            "target_roles": "護理師，寵物美容師，護理師",
+        },
+    )
+    events = _parse_sse(response.text)
+
+    assert captured["query_roles"] == ["護理師", "寵物美容師"]
+    assert captured["rank_roles"] == ["護理師", "寵物美容師"]
+    profile = next(event["data"] for event in events if event["type"] == "profile")
+    assert profile["preferred_roles"] == ["護理師", "寵物美容師"]
 
 
 def test_jobs_auto_reuses_posted_profile_json_without_reparsing(monkeypatch):

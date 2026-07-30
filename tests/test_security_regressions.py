@@ -2,8 +2,17 @@ import json
 import threading
 from types import SimpleNamespace
 
+from fastapi import FastAPI
+
 from app import server as server_mod
 from app.models import Profile, ResumeAssessment
+from app.public_web import is_public_api_request
+from app.security import (
+    PublicSecurityHeadersMiddleware,
+    is_allowed_origin,
+    new_signed_session_token,
+    verify_signed_session_token,
+)
 from tests.client import RawTestClient, TestClient
 
 
@@ -42,6 +51,54 @@ def test_api_session_bootstrap_allows_loopback_client():
     assert bootstrap.status_code == 200
     assert bootstrap.cookies.get("jobsmith_session")
     assert client.get("/api/memory").status_code == 200
+
+
+def test_public_web_api_allowlist_excludes_desktop_private_data():
+    assert is_public_api_request("GET", "/api/runtime")
+    assert is_public_api_request("POST", "/api/resume/preview")
+    assert is_public_api_request("POST", "/api/jobs/auto")
+    assert is_public_api_request("POST", "/api/tasks/job-search-123/stop")
+    assert not is_public_api_request("GET", "/api/memory")
+    assert not is_public_api_request("GET", "/api/searches")
+    assert not is_public_api_request("POST", "/api/run")
+    assert not is_public_api_request("GET", "/api/tasks/job-search-123/stop")
+
+
+def test_public_web_session_is_per_browser_and_signed():
+    secret = "process-secret"
+    first = new_signed_session_token(secret)
+    second = new_signed_session_token(secret)
+
+    assert first != second
+    assert verify_signed_session_token(first, secret)
+    assert verify_signed_session_token(second, secret)
+    assert not verify_signed_session_token(first, "other-secret")
+    assert not verify_signed_session_token(first + "tampered", secret)
+
+
+def test_public_origin_requires_exact_https_host():
+    hosts = ("jobsmith-web.onrender.com",)
+
+    assert is_allowed_origin("https://jobsmith-web.onrender.com", hosts)
+    assert not is_allowed_origin("http://jobsmith-web.onrender.com", hosts)
+    assert not is_allowed_origin("https://jobsmith-web.onrender.com.attacker.test", hosts)
+
+
+def test_public_security_headers_block_embedding_and_cross_origin_scripts():
+    mini_app = FastAPI()
+
+    @mini_app.get("/")
+    def home():
+        return {"ok": True}
+
+    mini_app.add_middleware(PublicSecurityHeadersMiddleware)
+    response = RawTestClient(mini_app).get("/")
+
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["strict-transport-security"].startswith("max-age=")
+    assert "script-src 'self'" in response.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
 
 
 def _parse_sse(text: str) -> list[dict]:

@@ -1,4 +1,4 @@
-"""Golden 評測案例：(jd_text, profile) 配對，供 eval harness 量測反思迴圈成效。"""
+"""Golden 評測案例：(jd_text, profile) 配對，供一次性投遞包品管 harness 使用。"""
 from app.models import Profile
 
 GOLDEN: list[dict] = [

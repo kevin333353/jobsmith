@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: jobsmith-web
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: JOBSMITH_PUBLIC_WEB
+        value: "1"
+      - key: JOBSMITH_PUBLIC_COOKIE_SECURE
+        value: "1"
+      - key: JOBSMITH_PUBLIC_SEARCH_CONCURRENCY
+        value: "3"

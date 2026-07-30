@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from app.store import db
 
 _PKG_KEYS = ("parsed_job", "match_report", "company_brief",
-             "tailored_resume", "cover_letter", "interview_kit", "critique")
+             "tailored_resume", "cover_letter", "interview_kit", "critique",
+             "artifact_targets", "company_research_requested", "quality_review")
 _ARTIFACT_KEYS = ("tailored_resume", "cover_letter", "interview_kit")
 
 
@@ -62,7 +63,8 @@ def save_package(final_state: dict, thread_id: str | None = None) -> int:
 
 
 def create_running_package(thread_id: str, jd_text: str, title: str,
-                           profile: dict | None = None) -> int:
+                           profile: dict | None = None,
+                           package: dict | None = None) -> int:
     """背景產生投遞包：先建一筆『進行中(running)』佔位，跑完再用 update_package_result 補成品。
 
     使用者一按「產生投遞包」就有紀錄、可離開頁面；pipeline 在伺服器背景續跑。
@@ -75,7 +77,8 @@ def create_running_package(thread_id: str, jd_text: str, title: str,
             (datetime.now(timezone.utc).isoformat(), title or "（產生中）", "",
              0, jd_text or "",
              json.dumps(profile, ensure_ascii=False) if profile else None,
-             None, 0, thread_id, "running"))
+             json.dumps(package, ensure_ascii=False) if package else None,
+             0, thread_id, "running"))
         conn.commit()
         return int(cur.lastrowid)
 

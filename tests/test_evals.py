@@ -38,12 +38,10 @@ def test_golden_fixtures_are_well_formed():
 
 
 @pytest.mark.live
-def test_reflection_lifts_quality_live():
-    # 真跑一個案例（claude_cli/anthropic），驗證反思開的最終分數 >= 反思關
+def test_single_pass_quality_review_live():
+    # 真跑一個案例（claude_cli/anthropic），驗證一次性品管可產出合法分數。
     case = GOLDEN[0]
-    off = run_case(case, max_revisions=0)
-    on = run_case(case, max_revisions=3)
-    assert off is not None and on is not None
-    off_mean = (off.resume_score + off.cover_letter_score + off.interview_score) / 3
-    on_mean = (on.resume_score + on.cover_letter_score + on.interview_score) / 3
-    assert on_mean >= off_mean
+    report = run_case(case)
+    assert report is not None
+    mean = (report.resume_score + report.cover_letter_score + report.interview_score) / 3
+    assert 0 <= mean <= 100

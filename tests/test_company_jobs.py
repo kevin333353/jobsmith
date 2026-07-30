@@ -50,3 +50,18 @@ def test_remote_options_are_forwarded_to_board_search(monkeypatch):
     cj.find_company_jobs("未來智能", work_modes=["remote"], include_inferred=True)
 
     assert captured == {"work_modes": ["remote"], "include_inferred": True}
+
+
+def test_no_ai_mode_skips_careers_research(monkeypatch):
+    monkeypatch.setattr(cj, "search_all", lambda kw, limit=15: [SearchResult(source="104", jobs=[
+        JobPosting(source="104", title="產品經理", company="未來智能", url="u1"),
+    ])])
+
+    def fail_research(*args, **kwargs):
+        raise AssertionError("no-AI company search must not call research_structured")
+
+    monkeypatch.setattr(cj, "research_structured", fail_research)
+
+    out = cj.find_company_jobs("未來智能", include_research=False)
+
+    assert [job.url for job in out] == ["u1"]

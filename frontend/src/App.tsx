@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import type { CandidateProfile, Seed, UserProfile, Preferences } from "./types"
+import type { CandidateProfile, JobMatch, Seed, UserProfile, Preferences } from "./types"
 import { JobSearchView } from "./views/JobSearchView"
 import { ResumeHealthView } from "./views/ResumeHealthView"
 import { ResumeCheckHistoryView } from "./views/ResumeCheckHistoryView"
@@ -20,7 +20,7 @@ import {
 import { Sidebar } from "./ui/Sidebar"
 import type { NavItem } from "./ui/Sidebar"
 import { Button } from "./ui/Button"
-import { Compass, FileChartColumn, Workflow, MessagesSquare, Archive, Settings2, Search, ChevronUp, ChevronDown, ClipboardList } from "./ui/icons"
+import { Compass, FileChartColumn, Workflow, MessagesSquare, Archive, Settings2, Search, ChevronUp, ChevronDown, ClipboardList, ShieldCheck } from "./ui/icons"
 
 type Tab = "search" | "searches" | "resume" | "resumeChecks" | "pipeline" | "interview" | "history" | "settings"
 
@@ -35,9 +35,102 @@ const NAV: NavItem<Tab>[] = [
 ]
 const FOOTER: NavItem<Tab>[] = [{ id: "settings", label: "個人化", icon: Settings2 }]
 const BACKEND_CONFIRMED_KEY = "copilot.backend.confirmed"
+const ONBOARDING_DONE_KEY = "copilot.onboarding.done"
 const GUIDE_DISMISSED_KEY = "copilot.firstRunGuide.dismissed"
 
-export default function App() {
+export type RuntimeConfig = {
+  public_web: boolean
+  ai_enabled: boolean
+  persistence_enabled: boolean
+  max_search_pages: number
+  version: string
+}
+
+const DESKTOP_RUNTIME: RuntimeConfig = {
+  public_web: false,
+  ai_enabled: true,
+  persistence_enabled: true,
+  max_search_pages: 5,
+  version: "",
+}
+
+export default function App({ runtime = DESKTOP_RUNTIME }: { runtime?: RuntimeConfig }) {
+  return runtime.public_web ? <PublicWebApp runtime={runtime} /> : <DesktopApp />
+}
+
+function PublicWebApp({ runtime }: { runtime: RuntimeConfig }) {
+  const [searchFormOpen, setSearchFormOpen] = useState(true)
+  const [searchHasResults, setSearchHasResults] = useState(false)
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="sticky top-0 z-30 border-b border-slate-200/90 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl items-center gap-2 px-3 py-2.5 sm:px-6">
+          <img src="/favicon.svg" alt="" className="h-8 w-8 rounded-lg" />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-slate-900">Jobsmith Web</span>
+              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                免 AI
+              </span>
+            </div>
+            <p className="hidden text-[11px] text-slate-500 sm:block">
+              手機上傳履歷，直接找台灣職缺
+            </p>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            {searchHasResults && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={searchFormOpen ? ChevronUp : ChevronDown}
+                className="shrink-0 whitespace-nowrap"
+                onClick={() => setSearchFormOpen((open) => !open)}
+              >
+                {searchFormOpen ? "收合" : "修改條件"}
+              </Button>
+            )}
+            <div className="hidden sm:block"><GithubStar liveCount={false} /></div>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-5xl px-3 py-4 sm:px-6 sm:py-6">
+        {!searchHasResults && (
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs text-emerald-900">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>
+              公開測試版不需帳號、不呼叫 AI，也不把履歷寫入資料庫。
+              檔案只在本次請求中解析；搜尋結果只保存在這台裝置的瀏覽器。
+            </p>
+          </div>
+        )}
+        <JobSearchView
+          publicWeb
+          maxSearchPages={runtime.max_search_pages}
+          onPick={() => undefined}
+          formOpen={searchFormOpen}
+          setFormOpen={setSearchFormOpen}
+          onHasResults={setSearchHasResults}
+        />
+      </main>
+
+      <footer className="mx-auto max-w-5xl px-4 pb-8 pt-2 text-center text-xs text-slate-400">
+        Jobsmith {runtime.version ? `v${runtime.version} · ` : ""}
+        <a
+          href="https://github.com/kevin333353/jobsmith/blob/master/docs/PRIVACY.md"
+          target="_blank"
+          rel="noreferrer"
+          className="underline hover:text-slate-600"
+        >
+          隱私說明
+        </a>
+      </footer>
+    </div>
+  )
+}
+
+function DesktopApp() {
   const [tab, setTab] = useState<Tab>("search")
   const [backendConfirmed, setBackendConfirmed] = useState(
     () => localStorage.getItem(BACKEND_CONFIRMED_KEY) === "1")
@@ -56,8 +149,10 @@ export default function App() {
   const [privacyVersion, setPrivacyVersion] = useState(0)
   const [guideDismissed, setGuideDismissed] = useState(
     () => localStorage.getItem(GUIDE_DISMISSED_KEY) === "1")
-  // 開場引導：第一次使用先選 AI 後端並測試連線；確認過後記在 localStorage 不再跳出。
-  const [showOnboard, setShowOnboard] = useState(() => !backendConfirmed)
+  // 開場引導：免 AI 可直接開始；AI 後端只是選配。完成任一路徑後不再強制彈出。
+  const [showOnboard, setShowOnboard] = useState(
+    () => localStorage.getItem(ONBOARDING_DONE_KEY) !== "1" && !backendConfirmed,
+  )
 
   // 開 app 載入記憶：偏好自動套用；後端舊版保存的履歷只放進可選 Profile 清單，不設為目前使用。
   useEffect(() => {
@@ -137,10 +232,10 @@ export default function App() {
     fetch("/api/memory/profile", { method: "DELETE" }).catch(() => {})
   }
 
-  function pickJob(jd: string, picked?: UserProfile | null) {
+  function pickJob(jd: string, picked?: UserProfile | null, match?: JobMatch | null) {
     const nextProfile = picked ?? activeProfile?.profile ?? null
     if (picked) activateSessionProfile(picked, { resumeLabel: "搜尋紀錄履歷" })
-    setSeed({ jd, profile: nextProfile, nonce: Date.now() })
+    setSeed({ jd, profile: nextProfile, match, nonce: Date.now() })
     setTab("pipeline")
   }
 
@@ -160,12 +255,14 @@ export default function App() {
 
   function finishOnboard() {
     localStorage.setItem(BACKEND_CONFIRMED_KEY, "1")
+    localStorage.setItem(ONBOARDING_DONE_KEY, "1")
     setBackendConfirmed(true)
     setBackendRefreshKey((key) => key + 1)
     setShowOnboard(false)
   }
 
   function skipOnboard() {
+    localStorage.setItem(ONBOARDING_DONE_KEY, "1")
     setShowOnboard(false)
   }
 
@@ -210,9 +307,10 @@ export default function App() {
           {/* 投遞包工作台要乾淨一頁式：不顯示右上角的執行模式/模型選擇，內容因此往上移。
               其餘分頁仍保留右上角的後端控制台。 */}
           {tab !== "pipeline" && (
-            <header className="mb-6 flex items-center justify-end gap-3">
+            <header className="mb-6 flex flex-wrap items-center justify-end gap-2 sm:gap-3">
               {tab === "search" && searchHasResults && (
                 <Button variant="secondary" size="sm" icon={searchFormOpen ? ChevronUp : ChevronDown}
+                  className="shrink-0 whitespace-nowrap"
                   onClick={() => setSearchFormOpen((o) => !o)}>
                   {searchFormOpen ? "收合搜尋條件" : "修改搜尋條件"}
                 </Button>

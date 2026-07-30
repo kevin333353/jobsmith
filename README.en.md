@@ -25,12 +25,15 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
 </div>
 
 > The app UI is in Traditional Chinese, tailored to Taiwan's job-search conventions (104 / Cake / Yourator / LinkedIn). Data is stored locally by default; when you run AI features, your résumé and prompts are handled by the CLI, local model, or BYOK backend you choose. See [Privacy and Data Handling](docs/PRIVACY.md).
+>
+> An accountless **public Web preview mode** is also available for mobile testing. It forces no-AI matching, stores no server-side resume/search history, and exposes only resume-to-job search plus in-browser filtering. See [Public Web preview deployment](docs/WEB_DEPLOYMENT.md).
 
 ---
 
 ## Feature Overview
 
 - **Auto job search**: upload a resume, let AI derive keywords, and search 104 / Yourator / LinkedIn / Cake.
+- **Mobile Web entry**: the public mode provides deterministic resume recognition, job search, local result filtering, and links to original postings without an AI account.
 - **Ranked results**: stream search results, score fit, and open the right jobs for an application package.
 - **Package workbench**: generate tailored resume bullets, cover letters, interview prep, and company research.
 - **Resume health check**: audit ATS fit, show deep-check or fallback status, and keep local report history.
@@ -50,7 +53,7 @@ Runs through your own **Claude Code / Codex CLI** subscription (no separate API 
    - **Local model** — a running **Ollama** server (default `http://127.0.0.1:11434/v1`) or **llama.cpp server** (default `http://127.0.0.1:8080/v1`), **or**
    - **BYOK** — `base_url` + `api_key` + `model` for any OpenAI-compatible endpoint (OpenAI, DeepSeek, Gemini, Groq, OpenRouter, Ollama, LM Studio, vLLM…).
 
-> **Requirements:** Windows 10/11 (64-bit; WebView2 is built into Windows 11). Your history, settings, and `.env` are saved next to the `.exe`; Jobsmith does not operate a hosted backend, and AI requests go only to the backend you choose.
+> **Requirements:** Windows 10/11 (64-bit; WebView2 is built into Windows 11). Desktop history, settings, and `.env` are saved next to the `.exe`, and AI requests go only to the backend you choose. The limited public Web preview has a separate [privacy model](docs/PRIVACY.md).
 
 **macOS**
 
@@ -126,11 +129,11 @@ Pick your AI engine from the **top-right control panel** — a **local CLI subsc
 | `ollama`     | Local model                            | Defaults to Ollama; can be switched to llama.cpp server or a custom local OpenAI-compatible endpoint. Detects local models for dropdown selection; quality and speed depend on your hardware and model. |
 | `openai`     | BYOK — any OpenAI-compatible endpoint  | `base_url` + `api_key` + `model`. Works with OpenAI, DeepSeek, Gemini, Groq, OpenRouter, Ollama, LM Studio, vLLM… |
 
-CLI backends call the corresponding provider through the logged-in CLI on your machine. Local models and BYOK both call the OpenAI-compatible endpoint you configure. Jobsmith does not operate a hosted backend or send your data to the project maintainer's server. BYOK and local model settings are written only to your local `.env`. An API-key backend (`anthropic`) also exists for self-hosting or CI.
+CLI backends call the corresponding provider through the logged-in CLI on your machine. Local models and BYOK both call the OpenAI-compatible endpoint you configure. Full AI features remain local-first or self-hosted; BYOK and local-model settings are written only to your local `.env`. The public Web preview accepts no AI keys. An API-key backend (`anthropic`) also exists for self-hosting or CI.
 
 ## Privacy and Data
 
-Jobsmith stores profile memory, preferences, searches, generated packages, `.env`, and error logs locally. You can open **Settings → Clear personal data** to remove resume memory, searches, and generated package history; AI backend settings are kept so you do not need to re-enter API keys.
+The desktop app stores profile memory, preferences, searches, generated packages, `.env`, and error logs locally. The public Web preview creates no account or server-side resume record, but the server processes each upload for that request and the browser retains compact search results locally. Use **Settings → Clear personal data** on desktop, or clear the site's browser data for the Web preview.
 
 When you run AI features, your résumé, job descriptions, and prompts are sent to the AI backend you selected. Read [Privacy and Data Handling](docs/PRIVACY.md) before using the app with sensitive data.
 

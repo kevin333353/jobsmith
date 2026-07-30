@@ -1,4 +1,4 @@
-"""FastAPI：以 SSE 串流跑反思迴圈圖，並用 HTTP 處理 human-in-the-loop。"""
+"""FastAPI：以背景工作執行漸進式投遞包流程，並用 HTTP 回傳進度與結果。"""
 import json
 import os
 import re
@@ -11,26 +11,36 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import requests
 from fastapi import Body, FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.memory import MemorySaver
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__, settings, task_control
 from app.agents.company_jobs import find_company_jobs
 from app.agents.job_search import derive_queries, fallback_rank_jobs, rank_jobs
-from app.agents.resume_eval import evaluate_resume, fallback_resume_assessment, structure_profile
+from app.agents.local_discovery import derive_local_queries, rank_jobs_locally
+from app.agents.resume_eval import (
+    evaluate_resume,
+    fallback_resume_assessment,
+    structure_profile,
+    structure_profile_local,
+)
+from app.agents.skill_gap import analyze_skill_gap
 from app.cli import load_profile
 from app.graph import build_graph
 from app.intake.resume_parser import extract_text
-from app.models import Profile
+from app.models import MatchReport, ParsedJob, Profile
+from app.public_web import PUBLIC_WEB, public_search_concurrency
 from app.security import (
     ALLOWED_HOSTS,
     LocalAPISecurityMiddleware,
+    PublicSecurityHeadersMiddleware,
     new_api_token,
     set_session_cookie,
 )
@@ -45,13 +55,21 @@ from app.store import resume_checks as _resume_checks
 from app.store import searches as _searches
 
 _API_TOKEN = new_api_token()
-app = FastAPI(title="Jobsmith")
+app = FastAPI(
+    title="Jobsmith",
+    docs_url=None if PUBLIC_WEB else "/docs",
+    redoc_url=None if PUBLIC_WEB else "/redoc",
+    openapi_url=None if PUBLIC_WEB else "/openapi.json",
+)
 # add_middleware() inserts at the front; add TrustedHost last so it is the outer boundary.
-app.add_middleware(LocalAPISecurityMiddleware, token=_API_TOKEN)
+app.add_middleware(LocalAPISecurityMiddleware, token=_API_TOKEN, public_web=PUBLIC_WEB)
+if PUBLIC_WEB:
+    app.add_middleware(PublicSecurityHeadersMiddleware)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(ALLOWED_HOSTS))
 
-_appdb.init_db()  # 應用層 sqlite（歷史/記憶）
-_history.mark_stale_running_failed()  # 啟動時把上次殘留的「進行中」收尾為 failed
+if not PUBLIC_WEB:
+    _appdb.init_db()  # 應用層 sqlite（歷史/記憶）
+    _history.mark_stale_running_failed()  # 啟動時把上次殘留的「進行中」收尾為 failed
 
 
 def _new_run_graph():
@@ -66,12 +84,36 @@ if (_FRONTEND_DIST / "assets").is_dir():
 
 _ERROR_LOG = _ROOT / "data" / "error.log"
 _MAX_RESUME_UPLOAD_BYTES = 5 * 1024 * 1024
+_MAX_RESUME_TEXT_CHARS = 100_000
+_PUBLIC_RESUME_EXTENSIONS = frozenset({".pdf", ".docx", ".txt"})
+_PUBLIC_SEARCH_SLOTS = threading.BoundedSemaphore(public_search_concurrency())
 
 
 @app.get("/api/session")
 def api_session():
-    """Bootstrap the process-local HttpOnly API session cookie."""
-    return set_session_cookie(JSONResponse({"ok": True}), _API_TOKEN)
+    """Bootstrap an HttpOnly API session cookie."""
+    return set_session_cookie(
+        JSONResponse({"ok": True}),
+        _API_TOKEN,
+        public_web=PUBLIC_WEB,
+    )
+
+
+@app.get("/api/runtime", include_in_schema=False)
+def api_runtime():
+    """Tell the bundled frontend which product surface this process exposes."""
+    return {
+        "public_web": PUBLIC_WEB,
+        "ai_enabled": not PUBLIC_WEB,
+        "persistence_enabled": not PUBLIC_WEB,
+        "max_search_pages": 2 if PUBLIC_WEB else 5,
+        "version": __version__,
+    }
+
+
+@app.get("/api/healthz", include_in_schema=False)
+def api_healthz():
+    return {"ok": True, "mode": "public_web" if PUBLIC_WEB else "desktop"}
 
 
 def _open_folder(path: Path) -> None:
@@ -93,19 +135,27 @@ def _read_resume_upload(file: UploadFile) -> bytes:
 
 def _resume_text_from_request(file: UploadFile | None, resume_text: str) -> tuple[str, str | None]:
     if file is None:
-        return resume_text, None
-    try:
-        data = _read_resume_upload(file)
-        return extract_text(data, file.filename or "resume.txt"), None
-    except ValueError as exc:
-        return "", str(exc)
-    except Exception as exc:  # noqa: BLE001
-        return "", f"resume file could not be parsed: {_err_detail(exc)}"
+        text = resume_text
+    else:
+        if PUBLIC_WEB and Path(file.filename or "").suffix.casefold() not in _PUBLIC_RESUME_EXTENSIONS:
+            return "", "公開測試版只支援 PDF、DOCX 或 TXT 履歷"
+        try:
+            data = _read_resume_upload(file)
+            text = extract_text(data, file.filename or "resume.txt")
+        except ValueError as exc:
+            return "", str(exc)
+        except Exception as exc:  # noqa: BLE001
+            return "", f"resume file could not be parsed: {_err_detail(exc)}"
+    if len(text) > _MAX_RESUME_TEXT_CHARS:
+        return "", "履歷文字過長，請縮短至 100,000 字元以內"
+    return text, None
 
 
 def _profile_from_json(raw: str) -> tuple[Profile | None, str | None]:
     if not (raw or "").strip():
         return None, None
+    if len(raw) > _MAX_RESUME_TEXT_CHARS * 2:
+        return None, "已儲存 Profile 過大，請重新上傳履歷。"
     try:
         data = json.loads(raw)
         profile = Profile(**data)
@@ -116,19 +166,41 @@ def _profile_from_json(raw: str) -> tuple[Profile | None, str | None]:
         return None, f"已儲存 Profile 格式無法讀取：{_err_detail(exc)}"
 
 
+@app.post("/api/resume/preview")
+def resume_preview(
+    file: UploadFile | None = File(default=None),
+    resume_text: str = Form(default=""),
+):
+    """Locally extract a compact profile so target roles can be reviewed before searching."""
+    text, text_error = _resume_text_from_request(file, resume_text)
+    if text_error:
+        return JSONResponse({"error": text_error}, status_code=400)
+    if not text.strip():
+        return JSONResponse({"error": "請提供履歷檔案或文字"}, status_code=400)
+    try:
+        profile = structure_profile_local(text)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {"error": f"履歷暫時無法辨識：{_err_detail(exc)}"},
+            status_code=422,
+        )
+    return {"profile": profile.model_dump(exclude={"raw_text"})}
+
+
 def _err_detail(exc: Exception) -> str:
     """回傳「類別: 訊息(截斷)」供前端顯示，並把完整 traceback 落地到 data/error.log（盡力而為）。
 
     視窗版 exe 沒有 console，否則錯誤細節會直接消失、無從診斷。只印類別名稱（如「RuntimeError」）
     無法分辨真正原因（CLI 找不到／rc≠0／回報錯誤／結構化解析失敗 是完全不同的問題）。
     """
-    try:
-        _ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with _ERROR_LOG.open("a", encoding="utf-8") as f:
-            f.write(f"\n===== {datetime.now().isoformat(timespec='seconds')} =====\n")
-            f.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
-    except Exception:
-        pass  # 寫日誌失敗不可影響回應
+    if not PUBLIC_WEB:
+        try:
+            _ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with _ERROR_LOG.open("a", encoding="utf-8") as f:
+                f.write(f"\n===== {datetime.now().isoformat(timespec='seconds')} =====\n")
+                f.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+        except Exception:
+            pass  # 寫日誌失敗不可影響回應
     return f"{type(exc).__name__}: {str(exc)[:300]}"
 
 
@@ -290,6 +362,16 @@ class RunBody(BaseModel):
     profile: dict | None = None
     # 個人化偏好（語氣/目標職稱/年資/想強調技能）；套進 profile 讓各生成 agent 採用。
     preferences: dict | None = None
+    # Web 預設只做客製履歷；其他文件、公司情報與 AI 品管由使用者按需開啟。
+    artifact_targets: list[Literal["resume", "cover_letter", "interview"]] = Field(
+        default_factory=lambda: ["resume"],
+        min_length=1,
+    )
+    company_research_requested: bool = False
+    quality_review: bool = False
+    # 從 AI 職缺搜尋進入時可重用已解析職缺與配對報告，避免同一份資料再跑兩次。
+    parsed_job: ParsedJob | None = None
+    match_report: MatchReport | None = None
 
 
 # 注意：以下兩個串流端點用一般 def（非 async def），讓 Starlette 在 threadpool 執行
@@ -378,7 +460,14 @@ def resume_evaluate(
         finally:
             _finish_task(token)
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 _RANK_BATCH = 12  # 每批送 LLM 排序的職缺數（批小→首批更快出現）
@@ -428,11 +517,29 @@ def _parse_companies(raw: str) -> list[str]:
     return out
 
 
+def _parse_target_roles(raw: str, limit: int = 3) -> list[str]:
+    """Parse user-confirmed target titles without requiring a known taxonomy entry."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[,，、\n]", raw or ""):
+        role = " ".join(part.split()).strip()
+        key = role.casefold()
+        if not role or len(role) > 80 or key in seen:
+            continue
+        seen.add(key)
+        out.append(role)
+        if len(out) >= limit:
+            break
+    return out
+
+
 @app.post("/api/jobs/auto")
 def jobs_auto(
     file: UploadFile | None = File(default=None),
     resume_text: str = Form(default=""),
     profile_json: str = Form(default=""),
+    target_roles: str = Form(default=""),
+    search_mode: Literal["local", "ai"] = Form(default="ai"),
     companies: str = Form(default=""),
     pages: int = Form(default=2),
     region: str = Form(default=""),
@@ -447,13 +554,20 @@ def jobs_auto(
 ):
     """履歷 → 自動找職缺：解析履歷 → 推導關鍵字 → 搜尋多站 →（選填）併入指定公司的開缺 → 依履歷排序。
 
+    search_mode：local 不呼叫生成式 AI；ai 維持既有的 AI 解析與排序。
     pages：每個來源抓幾頁（使用者可在前端調整，預設 2、夾在 1–5）。
     region：搜尋前選定的縣市（逗號串接 key）。對所有來源一致生效——104 於來源端用 area
             代碼篩選（涵蓋更全），其餘來源在結果端用 location 過濾，使用者看到的就是同一份地區結果。
     work_mode：remote / hybrid（逗號串接）。預設只接受來源明確標示；
                include_inferred_work_mode=true 時才納入 JD 文字推測。
+    target_roles：使用者搜尋前確認的目標職稱（最多三個）；可使用詞庫外職稱。
     """
+    if PUBLIC_WEB:
+        # The accountless Web preview never calls a configured AI backend.
+        search_mode = "local"
     pages = max(1, min(5, pages))
+    if PUBLIC_WEB:
+        pages = min(2, pages)
     max_experience_years = (
         None if max_experience_years is None else max(0.0, min(50.0, max_experience_years))
     )
@@ -467,12 +581,24 @@ def jobs_auto(
     work_mode_keys = work_mode_filter.parse_work_modes(work_mode)
     text, text_error = _resume_text_from_request(file, resume_text)
     posted_profile, profile_error = (None, None) if text.strip() else _profile_from_json(profile_json)
+    target_role_list = _parse_target_roles(target_roles)
     company_list = _parse_companies(companies)
+    if PUBLIC_WEB:
+        company_list = company_list[:2]
     token = _task_from_id(task_id)
 
     def gen():
+        public_slot = False
         try:
             yield _sse({"type": "start", "task_id": token.task_id})
+            if PUBLIC_WEB:
+                public_slot = _PUBLIC_SEARCH_SLOTS.acquire(blocking=False)
+                if not public_slot:
+                    yield _sse({
+                        "type": "error",
+                        "message": "公開測試版目前使用人數較多，請稍候一分鐘再試。",
+                    })
+                    return
             token.check()
             if text_error:
                 yield _sse({"type": "error", "message": text_error})
@@ -483,29 +609,52 @@ def jobs_auto(
             if not text.strip() and posted_profile is None:
                 yield _sse({"type": "error", "message": "請提供履歷檔案或文字"})
                 return
-            # 功能性把關：AI 真的接得通才開始搜尋，否則中止並引導登入——
-            # 不再讓「沒接通」靜默退到本機備援、把爛結果偽裝成 AI 解析。
-            yield _sse({"type": "progress", "step": "backend", "message": "檢查 AI 引擎連線中…"})
-            with task_control.task_context(token):
-                live, live_msg = ensure_backend_live(settings.current_backend())
-            if not live:
-                yield _sse({"type": "error", "message": live_msg})
-                return
-            token.check()
-            if text.strip():
-                yield _sse({"type": "progress", "step": "structure", "message": "解析履歷中…"})
+            if search_mode == "ai":
+                # AI 模式維持功能性把關；本機模式完全不探測或呼叫 AI 後端。
+                yield _sse({
+                    "type": "progress",
+                    "step": "backend",
+                    "message": "檢查 AI 引擎連線中…",
+                })
                 with task_control.task_context(token):
-                    profile = structure_profile(text)
+                    live, live_msg = ensure_backend_live(settings.current_backend())
+                if not live:
+                    yield _sse({"type": "error", "message": live_msg})
+                    return
+                token.check()
+            if text.strip():
+                if search_mode == "local":
+                    yield _sse({
+                        "type": "progress",
+                        "step": "structure",
+                        "message": "在本機辨識履歷中（0 AI 呼叫）…",
+                    })
+                    profile = structure_profile_local(text)
+                else:
+                    yield _sse({"type": "progress", "step": "structure", "message": "解析履歷中…"})
+                    with task_control.task_context(token):
+                        profile = structure_profile(text)
             else:
                 yield _sse({"type": "progress", "step": "profile", "message": "使用目前 Profile…"})
                 profile = posted_profile
                 assert profile is not None
+            if target_role_list:
+                # User confirmation is authoritative. Unknown occupations remain searchable verbatim.
+                profile.preferred_roles = target_role_list
             token.check()
             # 把使用者真實履歷（含 raw_text 原文）送給前端，供「產生投遞包」時整包帶入 pipeline，
             # 讓 match/resume/cover/interview agent 拿到逐字履歷（檔案上傳時前端沒有原文，必須由後端帶）。
-            yield _sse({"type": "profile", "data": profile.model_dump()})
-            with task_control.task_context(token):
-                queries = derive_queries(profile)
+            profile_data = (
+                profile.model_dump(exclude={"raw_text"})
+                if PUBLIC_WEB
+                else profile.model_dump()
+            )
+            yield _sse({"type": "profile", "data": profile_data})
+            if search_mode == "local":
+                queries = derive_local_queries(profile)
+            else:
+                with task_control.task_context(token):
+                    queries = derive_queries(profile)
             token.check()
             yield _sse({"type": "queries", "queries": queries})
 
@@ -548,7 +697,7 @@ def jobs_auto(
                         seen.add(key)
                         resume_jobs.append(j)
 
-            # 誠實降級：AI 搜尋零結果 → 告知並改用後備樣本職缺，demo 永遠有東西看。
+            # 誠實降級：即時來源零結果 → 告知並改用後備樣本職缺，demo 永遠有東西看。
             used_fallback = False
             if not resume_jobs and region_matched_count == 0 and not work_mode_keys:
                 used_fallback = True
@@ -557,15 +706,45 @@ def jobs_auto(
                                        "並請改用下方 LinkedIn / 104 直連搜尋。"})
                 resume_jobs = _load_fallback_jobs()
 
-            # ① AI 依履歷找到的職缺：分批『並行』排序、逐批串流給前端（邊收邊排序/篩選），
-            # 不必等全部跑完；批次以穩定鍵排序，讓同一輸入分批一致。
+            # ① 依履歷找到的職缺：本機模式一次確定性評分後分批送出；
+            # AI 模式維持多批並行，兩者都讓前端能邊收邊顯示。
             resume_jobs.sort(key=lambda j: j.url or (j.title + j.company))
-            yield _sse({"type": "rank_start", "total": len(resume_jobs), "fallback": used_fallback})
+            yield _sse({
+                "type": "rank_start",
+                "total": len(resume_jobs),
+                "fallback": used_fallback,
+                "mode": search_mode,
+            })
             matches = []
-            for batch in _rank_in_batches(profile, resume_jobs, token=token):
-                token.check()
-                matches.extend(batch)
-                yield _sse({"type": "ranked_batch", "data": [m.model_dump() for m in batch]})
+            if search_mode == "local":
+                yield _sse({
+                    "type": "progress",
+                    "step": "rank",
+                    "message": f"用本機規則比對 {len(resume_jobs)} 筆職缺…",
+                })
+                local_matches = rank_jobs_locally(profile, resume_jobs, top_k=None)
+                for start in range(0, len(local_matches), _RANK_BATCH):
+                    token.check()
+                    batch = local_matches[start:start + _RANK_BATCH]
+                    matches.extend(batch)
+                    yield _sse({
+                        "type": "ranked_batch",
+                        "data": [match.model_dump() for match in batch],
+                    })
+            else:
+                for batch in _rank_in_batches(profile, resume_jobs, token=token):
+                    token.check()
+                    matches.extend(batch)
+                    yield _sse({
+                        "type": "ranked_batch",
+                        "data": [match.model_dump() for match in batch],
+                    })
+
+            related_jobs = [match.job for match in matches if match.fit_score >= 60]
+            if not related_jobs:
+                related_jobs = [match.job for match in matches[:20]]
+            skill_gap = analyze_skill_gap(profile, related_jobs)
+            yield _sse({"type": "skill_gap", "data": skill_gap.model_dump()})
             li_loc = f"{region_keys[0]}, Taiwan" if region_keys else "Taiwan"
             yield _sse({"type": "linkedin",
                         "url": linkedin_search_url(
@@ -588,6 +767,8 @@ def jobs_auto(
                             "work_modes": work_mode_keys,
                             "include_inferred": include_inferred_work_mode,
                         }
+                    if search_mode == "local":
+                        company_search_kwargs["include_research"] = False
                     found = find_company_jobs(company, profile, **company_search_kwargs)
                 except Exception:
                     found = []
@@ -614,11 +795,18 @@ def jobs_auto(
                 yield _sse({"type": "source", "source": company,
                             "count": added, "blocked": added == 0})
             if company_pool:
-                yield _sse({"type": "progress", "step": "rank",
-                            "message": f"依履歷排序 {len(company_pool)} 筆指定公司職缺…"})
+                rank_label = "用本機規則比對" if search_mode == "local" else "依履歷排序"
+                yield _sse({
+                    "type": "progress",
+                    "step": "rank",
+                    "message": f"{rank_label} {len(company_pool)} 筆指定公司職缺…",
+                })
                 token.check()
-                with task_control.task_context(token):
-                    cmatches = rank_jobs(profile, company_pool, top_k=None)
+                if search_mode == "local":
+                    cmatches = rank_jobs_locally(profile, company_pool, top_k=None)
+                else:
+                    with task_control.task_context(token):
+                        cmatches = rank_jobs(profile, company_pool, top_k=None)
                 token.check()
                 yield _sse({"type": "company_jobs",
                             "data": [m.model_dump() for m in cmatches]})
@@ -626,12 +814,22 @@ def jobs_auto(
         except task_control.TaskCancelled:
             yield _stopped_sse()
         except Exception as exc:  # LLM/網路錯誤：友善降級
+            prefix = "AI 服務暫時無法使用" if search_mode == "ai" else "搜尋暫時無法完成"
             yield _sse({"type": "error",
-                        "message": f"AI 服務暫時無法使用，請稍後再試。（{_err_detail(exc)}）"})
+                        "message": f"{prefix}，請稍後再試。（{_err_detail(exc)}）"})
         finally:
+            if public_slot:
+                _PUBLIC_SEARCH_SLOTS.release()
             _finish_task(token)
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _filter_jobs_by_experience(jobs: list, max_years: float | None) -> list:
@@ -1284,9 +1482,24 @@ def run(body: RunBody):
 
     thread_id = uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
+    targets = list(dict.fromkeys(body.artifact_targets))
+    # 公司情報只會被求職信與面試準備使用；只做履歷時不允許白花一次查詢。
+    company_research_requested = bool(
+        body.company_research_requested
+        and {"cover_letter", "interview"}.intersection(targets)
+    )
+    generation_config = {
+        "artifact_targets": targets,
+        "company_research_requested": company_research_requested,
+        "quality_review": body.quality_review,
+    }
+    parsed_job = body.parsed_job
+    match_report = body.match_report if parsed_job is not None else None
     initial = {
         "jd_text": body.jd_text, "profile": profile,
-        "parsed_job": None, "match_report": None, "supervisor_decision": None,
+        **generation_config,
+        "parsed_job": parsed_job, "match_report": match_report,
+        "supervisor_decision": None,
         "company_brief": None, "tailored_resume": None, "cover_letter": None,
         "interview_kit": None, "critique": None, "revision_count": 0,
         # batch=True：背景跑、略過互動核可關卡（核可改到「我的投遞包」做）。
@@ -1295,8 +1508,14 @@ def run(body: RunBody):
     with _RUNS_LOCK:
         # 與 privacy clear 共用同一把鎖：不可在清除途中建立未被取消的新 run。
         pid = _history.create_running_package(
-            thread_id, body.jd_text, _jd_title(body.jd_text), profile.model_dump())
+            thread_id,
+            body.jd_text,
+            parsed_job.title if parsed_job is not None else _jd_title(body.jd_text),
+            profile.model_dump(),
+            generation_config,
+        )
         run_obj = _Run(thread_id, pid)
+        run_obj.emit({"type": "config", "data": generation_config})
         # 沒帶真實履歷 → 用範例 demo，明確提醒使用者（避免把假人投遞包當成自己的）。
         if not body.profile:
             run_obj.emit({"type": "profile_warning",
@@ -1306,7 +1525,7 @@ def run(body: RunBody):
         _RUNS[thread_id] = run_obj
         run_obj.future = _RUN_EXECUTOR.submit(
             _run_pipeline_bg, run_obj, initial, config, _new_run_graph())
-    return {"thread_id": thread_id, "package_id": pid}
+    return {"thread_id": thread_id, "package_id": pid, **generation_config}
 
 
 @app.get("/api/run/events/{thread_id}")
@@ -1501,10 +1720,16 @@ def index():
     dist_index = _FRONTEND_DIST / "index.html"
     if dist_index.exists():
         response = HTMLResponse(dist_index.read_text(encoding="utf-8"))
-        return set_session_cookie(response, _API_TOKEN)
+        return set_session_cookie(response, _API_TOKEN, public_web=PUBLIC_WEB)
     return HTMLResponse(
         "<h1>前端尚未建置</h1><p>請先執行 <code>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</code>，"
         "再重新整理。</p>", status_code=503)
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots():
+    """Keep the temporary public preview out of search indexes."""
+    return Response("User-agent: *\nDisallow: /\n", media_type="text/plain")
 
 
 # dist 根目錄的靜態檔（favicon 等）不在 /assets 底下，需個別提供；

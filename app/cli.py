@@ -1,4 +1,4 @@
-"""終端機進入點：讀 JD → 跑反思迴圈圖 → 人工核可 → 印完整投遞包。"""
+"""終端機進入點：讀 JD → 產出完整文件＋一次品管 → 人工核可 → 印投遞包。"""
 import json
 import sys
 import uuid
@@ -95,6 +95,10 @@ def run(jd_path: str, profile_path: str = "data/demo_profile.json") -> CopilotSt
     initial = {
         "jd_text": jd_text,
         "profile": profile,
+        # CLI 保留舊版「一次產完整包」語意；Web 預設改為快速投遞。
+        "artifact_targets": ["resume", "cover_letter", "interview"],
+        "company_research_requested": True,
+        "quality_review": True,
         "parsed_job": None,
         "match_report": None,
         "supervisor_decision": None,

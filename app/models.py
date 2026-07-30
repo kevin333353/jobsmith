@@ -133,7 +133,7 @@ class InterviewKit(BaseModel):
 
 
 class CritiqueReport(BaseModel):
-    """⑥ 品管/反思評審報告。"""
+    """⑥ 一次性 AI 品管報告（提供人工修改建議，不自動重寫）。"""
     resume_score: int = Field(ge=0, le=100)
     cover_letter_score: int = Field(ge=0, le=100)
     interview_score: int = Field(ge=0, le=100)
@@ -141,7 +141,7 @@ class CritiqueReport(BaseModel):
     per_doc: dict[str, list[str]] = Field(
         default_factory=dict,
         description="逐文件具體修改指示，鍵只能是 resume / cover_letter / interview；"
-                    "只放『未達標、需重寫』的文件，已達標的文件不要放（用於精準重寫，不重跑已過的文件）。")
+                    "只放『未達標、建議人工改善』的已產出文件，未選或已達標的文件不要放。")
     feedback: list[str] = Field(default_factory=list,
                                 description="（程式由 per_doc 自動彙整，模型可不填）")
 
@@ -260,6 +260,18 @@ class JobMatch(BaseModel):
     matched: list[str] = Field(default_factory=list, description="符合點")
     gaps: list[str] = Field(default_factory=list, description="落差點")
     reason: str = Field(default="", description="為什麼適合/不適合")
+    ranking_mode: Literal["local", "ai"] | None = Field(
+        default=None,
+        description="排序方式；舊資料可能沒有此欄位。",
+    )
+    evidence_level: Literal["high", "medium", "low"] | None = Field(
+        default=None,
+        description="職缺文字可供比對的完整度，與適配度分開呈現。",
+    )
+    score_breakdown: dict[str, int] = Field(
+        default_factory=dict,
+        description="本機規則各適用元件的原始分數。",
+    )
 
 
 class JobPostingList(BaseModel):

@@ -1,9 +1,8 @@
-"""Supervisor 反思迴圈圖：parse → match →（proceed）company_research → 三生成並行
-→ join → critic →（revise 回圈 / approve）→ human_gate(interrupt) → END。
+"""漸進式投遞包圖：解析與匹配後，只產生使用者勾選的文件。
 
-迴圈採單節點回圈（critic→company_research）；company_research 重寫時跳過搜尋；
-生成節點讀 state 的 critique.feedback 改進；重寫覆寫各自 state key（last-write-wins，不需 reducer）。
-human_gate 用 interrupt()，故圖以 SqliteSaver checkpointer compile，執行需帶 thread_id。
+公司情報與 AI 品管都是選配；品管只提供一次建議，不再自動重寫文件。這讓預設的
+「快速投遞」只需解析、匹配、客製履歷三次模型呼叫，也保留完整投遞包的選擇。
+human_gate 用 interrupt()，故 CLI 圖以 SqliteSaver checkpointer compile，執行需帶 thread_id。
 """
 import os
 import sqlite3
@@ -22,7 +21,6 @@ from app.agents.interview import prepare_interview
 from app.agents.match import match_profile
 from app.agents.parse import parse_job
 from app.agents.resume import tailor_resume
-from app.agents.supervisor import supervise_after_critic, supervise_after_match
 from app.models import (
     CompanyBrief,
     CoverLetter,
@@ -35,8 +33,6 @@ from app.models import (
 )
 from app.state import CopilotState
 
-MAX_REVISIONS = 3  # 最多評審次數（至多 2 次重寫），防無限迴圈
-_DOC_PASS = 75     # 安全網：per_doc 未指明時，分數低於此者視為需重寫
 _ALL_DOCS = {"resume", "cover_letter", "interview"}
 
 
@@ -64,6 +60,8 @@ def _safe(state: CopilotState, node: str, key: str, fn, fallback):
 
 
 def parse_node(state: CopilotState) -> dict:
+    if state.get("parsed_job") is not None:
+        return {}  # 從職缺搜尋帶入已解析資料時直接重用，省一次模型呼叫
     return _safe(
         state, "parse", "parsed_job",
         lambda: parse_job(state["jd_text"]),
@@ -72,6 +70,8 @@ def parse_node(state: CopilotState) -> dict:
 
 
 def match_node(state: CopilotState) -> dict:
+    if state.get("match_report") is not None:
+        return {}  # 從職缺搜尋帶入既有 AI 配對結果時直接重用
     return _safe(
         state, "match", "match_report",
         lambda: match_profile(state["parsed_job"], state["profile"]),
@@ -80,8 +80,10 @@ def match_node(state: CopilotState) -> dict:
 
 
 def company_research_node(state: CopilotState) -> dict:
+    if not state.get("company_research_requested", True):
+        return {}
     if state.get("company_brief") is not None:
-        return {}  # 重寫回圈時不重複搜尋
+        return {}
     return _safe(
         state, "company_research", "company_brief",
         lambda: research_company(state["parsed_job"].company),
@@ -90,59 +92,32 @@ def company_research_node(state: CopilotState) -> dict:
     )
 
 
-def _feedback(state: CopilotState, doc: str):
-    """該文件這一輪的專屬品管回饋（無則 None）。"""
-    critique = state.get("critique")
-    if not critique:
-        return None
-    return critique.per_doc.get(doc) or None
-
-
 def _targets(state: CopilotState) -> set[str]:
-    """這一輪要(重)寫哪些文件：首輪（無 critique）全部；重寫輪依 supervisor / per_doc / 分數。"""
-    critique = state.get("critique")
-    if critique is None:
+    """本次要產生的文件；未帶欄位代表舊版 checkpoint，維持「全部產出」相容性。"""
+    requested = state.get("artifact_targets")
+    if requested is None:
         return set(_ALL_DOCS)
-    decision = state.get("supervisor_decision")  # supervisor 指定優先
-    if decision and decision.docs_to_revise:
-        return {d for d in decision.docs_to_revise if d in _ALL_DOCS}
-    docs = {d for d in (critique.per_doc or {}) if d in _ALL_DOCS}
-    if not docs and not critique.overall_pass:  # 安全網：模型沒指明就用分數挑
-        if critique.resume_score < _DOC_PASS:
-            docs.add("resume")
-        if critique.cover_letter_score < _DOC_PASS:
-            docs.add("cover_letter")
-        if critique.interview_score < _DOC_PASS:
-            docs.add("interview")
-    return docs
+    return {doc for doc in requested if doc in _ALL_DOCS}
 
 
 def supervisor_match_node(state: CopilotState) -> dict:
-    """① Supervisor：看匹配報告動態決定 proceed / stop（telemetry 經 _safe 記錄）。"""
-    return _safe(
-        state, "supervisor_match", "supervisor_decision",
-        lambda: supervise_after_match(
-            state["match_report"], state["parsed_job"], state["profile"]),
-        SupervisorDecision(next_action="stop", rationale="supervisor 失敗，保守停止"),
-    )
-
-
-def supervisor_critic_node(state: CopilotState) -> dict:
-    """① Supervisor：看品管評審動態決定 approve / revise + docs_to_revise。"""
-    return _safe(
-        state, "supervisor_critic", "supervisor_decision",
-        lambda: supervise_after_critic(
-            state["critique"], state.get("revision_count", 0), MAX_REVISIONS),
-        SupervisorDecision(next_action="approve", rationale="supervisor 失敗，直接送核可"),
-    )
+    """以既有配對分數做本機門檻判斷，不再為單一布林路由額外呼叫一次 LLM。"""
+    match = state["match_report"]
+    proceed = bool(match and match.recommend_proceed and match.score >= 60)
+    return {
+        "supervisor_decision": SupervisorDecision(
+            next_action="proceed" if proceed else "stop",
+            rationale="配對分數達 60 且建議繼續" if proceed else "配對分數或建議未達產出門檻",
+        )
+    }
 
 
 def resume_tailor_node(state: CopilotState) -> dict:
     if "resume" not in _targets(state):
-        return {}  # 重寫輪此文件已達標 → 保留現有、不重跑
+        return {}
     return _safe(
         state, "resume_tailor", "tailored_resume",
-        lambda: tailor_resume(state["parsed_job"], state["profile"], _feedback(state, "resume")),
+        lambda: tailor_resume(state["parsed_job"], state["profile"], None),
         TailoredResume(summary="（履歷生成失敗，請重試）", notes="生成失敗"),
     )
 
@@ -154,7 +129,7 @@ def cover_letter_node(state: CopilotState) -> dict:
         state, "cover_letter", "cover_letter",
         lambda: write_cover_letter(
             state["parsed_job"], state["profile"], state.get("company_brief"),
-            _feedback(state, "cover_letter")),
+            None),
         CoverLetter(body="（求職信生成失敗，請重試）"),
     )
 
@@ -166,7 +141,7 @@ def interview_prep_node(state: CopilotState) -> dict:
         state, "interview_prep", "interview_kit",
         lambda: prepare_interview(
             state["parsed_job"], state["profile"], state.get("company_brief"),
-            _feedback(state, "interview")),
+            None),
         InterviewKit(cautions=["面試準備生成失敗，請重試"]),
     )
 
@@ -176,16 +151,22 @@ def join_node(state: CopilotState) -> dict:
 
 
 def critic_node(state: CopilotState) -> dict:
+    targets = _targets(state)
+    fallback_scores = {
+        "resume_score": 0 if "resume" in targets else 100,
+        "cover_letter_score": 0 if "cover_letter" in targets else 100,
+        "interview_score": 0 if "interview" in targets else 100,
+    }
     out = _safe(
         state, "critic", "critique",
         lambda: critique_package(
-            state["parsed_job"], state["tailored_resume"],
-            state["cover_letter"], state["interview_kit"]),
-        # 評審失敗則放行到人工關卡（overall_pass=True 避免無謂重寫），由人決定。
-        CritiqueReport(resume_score=0, cover_letter_score=0, interview_score=0,
-                       overall_pass=True, feedback=["品管評審失敗，請人工檢視"]),
+            state["parsed_job"], state.get("tailored_resume"),
+            state.get("cover_letter"), state.get("interview_kit")),
+        # 品管失敗仍保留成品並交給人看；不觸發任何自動重寫。
+        CritiqueReport(**fallback_scores, overall_pass=True,
+                       feedback=["AI 品管失敗，請直接人工檢視成品"]),
     )
-    out["revision_count"] = state.get("revision_count", 0) + 1
+    out["revision_count"] = 1
     return out
 
 
@@ -194,10 +175,11 @@ def human_gate_node(state: CopilotState) -> dict:
     # 使用者事後到「我的投遞包」逐一核可或刪除，不必逐一卡在核可關卡。
     if state.get("batch"):
         return {"approved": None}
+    critique = state.get("critique")
     decision = interrupt({
         "message": "請審閱投遞包並決定是否核可",
         "match_score": state["match_report"].score,
-        "critique_pass": state["critique"].overall_pass,
+        "critique_pass": critique.overall_pass if critique else None,
     })
     approved = str(decision).strip().lower() in ("y", "yes", "approve", "是", "核可")
     return {"approved": approved}
@@ -212,15 +194,9 @@ def route_match_decision(state: CopilotState) -> str:
     return "company_research" if decision and decision.next_action == "proceed" else "stop"
 
 
-def route_critic_decision(state: CopilotState) -> str:
-    """依 supervisor 決策路由 revise / approve（上限保底已在 supervise_after_critic 處理）。
-
-    防呆：revise 但實際算不出要重寫哪份文件（_targets 空）→ 視為 approve，避免空轉重寫。
-    """
-    decision = state.get("supervisor_decision")
-    if decision and decision.next_action == "revise" and _targets(state):
-        return "revise"
-    return "approve"
+def route_after_generation(state: CopilotState) -> str:
+    """只有使用者明確勾選 AI 品管時才多花一次模型呼叫。"""
+    return "critic" if state.get("quality_review", True) else "human_gate"
 
 
 def _default_db_path() -> str:
@@ -241,7 +217,7 @@ def _sqlite_checkpointer() -> SqliteSaver:
 
 
 def build_graph(checkpointer=None):
-    """編譯反思迴圈圖。checkpointer 預設用 SqliteSaver（持久化）；測試可注入 MemorySaver。"""
+    """編譯漸進式產出圖。checkpointer 預設用 SqliteSaver；測試可注入 MemorySaver。"""
     g = StateGraph(CopilotState)
     g.add_node("parse", parse_node)
     g.add_node("match", match_node)
@@ -252,7 +228,6 @@ def build_graph(checkpointer=None):
     g.add_node("interview_prep", interview_prep_node)
     g.add_node("join", join_node)
     g.add_node("critic", critic_node)
-    g.add_node("supervisor_critic", supervisor_critic_node)
     g.add_node("human_gate", human_gate_node)
 
     g.add_edge(START, "parse")
@@ -268,11 +243,10 @@ def build_graph(checkpointer=None):
     g.add_edge("resume_tailor", "join")
     g.add_edge("cover_letter", "join")
     g.add_edge("interview_prep", "join")
-    g.add_edge("join", "critic")
-    g.add_edge("critic", "supervisor_critic")
     g.add_conditional_edges(
-        "supervisor_critic", route_critic_decision,
-        {"revise": "company_research", "approve": "human_gate"},
+        "join", route_after_generation,
+        {"critic": "critic", "human_gate": "human_gate"},
     )
+    g.add_edge("critic", "human_gate")
     g.add_edge("human_gate", END)
     return g.compile(checkpointer=checkpointer or _sqlite_checkpointer())
