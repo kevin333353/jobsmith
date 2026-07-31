@@ -10,6 +10,7 @@ import { SearchHistoryView } from "./views/SearchHistoryView"
 import { PreferencesView } from "./views/PreferencesView"
 import { BackendSelector } from "./components/BackendSelector"
 import { GithubStar } from "./components/GithubStar"
+import { PublicWebDesktopCta } from "./components/PublicWebDesktopCta"
 import { UpdateBanner } from "./components/UpdateBanner"
 import { Onboarding } from "./components/Onboarding"
 import { FirstRunGuide } from "./components/FirstRunGuide"
@@ -75,7 +76,7 @@ function PublicWebApp({ runtime }: { runtime: RuntimeConfig }) {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="font-semibold text-slate-900">Jobsmith Web</span>
-              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+              <span className="hidden rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 sm:inline-flex">
                 免 AI
               </span>
             </div>
@@ -89,16 +90,22 @@ function PublicWebApp({ runtime }: { runtime: RuntimeConfig }) {
                 variant="secondary"
                 size="sm"
                 icon={searchFormOpen ? ChevronUp : ChevronDown}
-                className="shrink-0 whitespace-nowrap"
+                aria-label={searchFormOpen ? "收合搜尋條件" : "修改搜尋條件"}
+                title={searchFormOpen ? "收合搜尋條件" : "修改搜尋條件"}
+                className="h-10 w-10 shrink-0 whitespace-nowrap !p-0 sm:h-auto sm:w-auto sm:!px-3 sm:!py-1.5"
                 onClick={() => setSearchFormOpen((open) => !open)}
               >
-                {searchFormOpen ? "收合" : "修改條件"}
+                <span className="hidden sm:inline">
+                  {searchFormOpen ? "收合" : "修改條件"}
+                </span>
               </Button>
             )}
-            <div className="hidden sm:block"><GithubStar liveCount={false} /></div>
+            <GithubStar liveCount={false} />
           </div>
         </div>
       </header>
+
+      <PublicWebDesktopCta />
 
       <main className="mx-auto max-w-5xl px-3 py-4 sm:px-6 sm:py-6">
         {!searchHasResults && (
