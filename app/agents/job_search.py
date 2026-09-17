@@ -25,10 +25,6 @@ class SearchQueries(BaseModel):
     # codex/gpt 可能把 queries 回成 null 或單一字串，先收斂避免結構化解析失敗。
     @field_validator("queries", mode="before")
     @classmethod
-    def _coerce_queries(cls, v):
-        return coerce_str_list(v)
-
-
 class _RankItem(BaseModel):
     index: int = Field(description="對應職缺清單的索引")
     fit_score: int = Field(ge=0, le=100)
@@ -38,24 +34,13 @@ class _RankItem(BaseModel):
 
     @field_validator("matched", "gaps", mode="before")
     @classmethod
-    def _coerce_lists(cls, v):
-        return coerce_str_list(v)
-
     @field_validator("reason", mode="before")
     @classmethod
-    def _coerce_reason(cls, v):
-        return coerce_str(v)
-
-
 class _RankResult(BaseModel):
     rankings: list[_RankItem] = Field(default_factory=list)
 
     @field_validator("rankings", mode="before")
     @classmethod
-    def _coerce_rankings(cls, v):
-        return v if v is not None else []
-
-
 def _profile_brief(profile: Profile) -> str:
     """精簡的求職者描述（不含 raw_text 全文，控制 prompt 大小）。"""
     return (

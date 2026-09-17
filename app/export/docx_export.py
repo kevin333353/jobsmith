@@ -29,7 +29,6 @@ _INTERVIEW_SECTIONS = [
 
 def _set_cjk_font(doc: Document) -> None:
     style = doc.styles["Normal"]
-    style.font.size = Pt(11)
     rpr = style.element.get_or_add_rPr()
     rfonts = rpr.get_or_add_rFonts()
     rfonts.set(qn("w:eastAsia"), "Microsoft JhengHei")
